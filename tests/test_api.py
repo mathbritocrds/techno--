@@ -1,4 +1,4 @@
-import os, sqlite3, tempfile
+import json, os, sqlite3, tempfile
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ["ADMIN_PASSWORD"] = "segredo-de-teste"
 
@@ -107,6 +107,46 @@ def test_financeiro_e_fluxo_de_caixa(auth, ana):
     client.patch(f"/finance/{tid}/paid", headers=auth)
     assert client.get("/finance/summary", headers=auth).json()["pagar_aberto"] == 0
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1, "due": "2026-13-45"}, headers=auth).status_code == 400
+
+def test_custos_por_setor_e_resumo_ia_sem_chave(auth, monkeypatch):
+    department_id = client.post("/departments", json={"name": "Z Operações"}, headers=auth).json()["id"]
+    employee_id = client.post("/employees", json={"name": "Joana", "salary": 3000, "pin": "2468",
+                                                  "department_id": department_id}, headers=auth).json()["id"]
+    client.post("/finance", json={"kind": "pagar", "description": "Energia", "amount": 1200,
+                                  "due": "2026-10-12", "department_id": department_id}, headers=auth)
+    client.post("/finance", json={"kind": "pagar", "description": "Licença", "amount": 300,
+                                  "due": "2026-10-15"}, headers=auth)
+    response = client.get("/finance/department-costs?month=2026-10", headers=auth)
+    assert response.status_code == 200
+    data = response.json()
+    operations = next(item for item in data["departments"] if item["department_id"] == department_id)
+    unassigned = next(item for item in data["departments"] if item["name"] == "Sem setor")
+    assert operations["paid"] == 0 and operations["open"] == 1200
+    assert operations["payroll"] == 3840 and operations["total"] == 5040
+    assert unassigned["open"] == 300 and data["totals"]["total"] == sum(item["total"] for item in data["departments"])
+    unavailable = client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth)
+    assert unavailable.status_code == 503 and "não está ativado" in unavailable.json()["detail"]
+    monkeypatch.setenv("XAI_API_KEY", "chave-de-teste")
+    captured = {}
+    class FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self):
+            return json.dumps({"output": [{"type": "message", "content": [
+                {"type": "output_text", "text": "Operações concentra os maiores custos."}]}]}).encode()
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        assert request.get_header("Authorization") == "Bearer chave-de-teste"
+        assert timeout == 30
+        return FakeResponse()
+    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
+    summary = client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth)
+    assert summary.status_code == 200 and summary.json()["summary"] == "Operações concentra os maiores custos."
+    assert captured["payload"]["store"] is False and captured["payload"]["max_output_tokens"] == 450
+    assert client.post("/finance", json={"kind": "receber", "description": "Venda", "amount": 200,
+                                         "due": "2026-10-12", "department_id": department_id}, headers=auth).status_code == 400
+    assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1,
+                                         "due": "2026-10-12", "department_id": 9999}, headers=auth).status_code == 404
 
 def test_logout_invalida_sessao():
     tk = client.post("/auth/login", json={"user": "admin", "password": "segredo-de-teste"}).json()["token"]

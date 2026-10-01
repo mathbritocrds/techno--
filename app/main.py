@@ -2,7 +2,8 @@
 Rodar (na raiz do repositório):  uvicorn app.main:app --reload
 Docs:   http://localhost:8000/docs
 """
-import csv, hashlib, hmac, io, math, os, secrets, sqlite3, time
+import csv, hashlib, hmac, io, json, math, os, secrets, sqlite3, time
+import urllib.error, urllib.request
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS time_entries(
   cpf TEXT DEFAULT '', nsr INTEGER, prev_hash TEXT, hash TEXT, samples INTEGER DEFAULT 1, spread_m REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS transactions(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL, description TEXT NOT NULL,
-  amount REAL NOT NULL, due TEXT NOT NULL, paid INTEGER DEFAULT 0, paid_at TEXT);
+    amount REAL NOT NULL, due TEXT NOT NULL, paid INTEGER DEFAULT 0, paid_at TEXT,
+    department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS materials(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, unit TEXT DEFAULT 'un',
   stock REAL NOT NULL DEFAULT 0, unit_cost REAL NOT NULL DEFAULT 0);
@@ -68,6 +70,7 @@ CREATE TABLE IF NOT EXISTS integrations(
   endpoint TEXT DEFAULT '', active INTEGER DEFAULT 1);
 """
 MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
+              "ALTER TABLE transactions ADD COLUMN department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
               "ALTER TABLE time_entries ADD COLUMN cpf TEXT DEFAULT ''",
               "ALTER TABLE time_entries ADD COLUMN nsr INTEGER",
               "ALTER TABLE time_entries ADD COLUMN prev_hash TEXT",
@@ -298,7 +301,7 @@ def payroll(month: Optional[str] = None):
         ot = round(oh * (e["salary"] / 220) * OVERTIME_RATE, 2)
         gross = e["salary"] + ot
         d = inss(gross)
-        out.append({"id": e["id"], "name": e["name"], "role": e["role"], "base_salary": e["salary"],
+        out.append({"id": e["id"], "name": e["name"], "role": e["role"], "department_id": e["department_id"], "base_salary": e["salary"],
                     "overtime_hours": oh, "overtime_pay": ot, "gross": round(gross, 2), "inss": round(d, 2),
                     "benefits": e["benefits"], "net": round(gross - d + e["benefits"], 2),
                     "company_cost": round(gross * (1 + EMPLOYER_CHARGES) + e["benefits"], 2)})
@@ -402,21 +405,28 @@ class Tx(BaseModel):
     description: str = Field(min_length=1)
     amount: float = Field(gt=0)
     due: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    department_id: Optional[int] = None
 
 @app.post("/finance", dependencies=[Depends(admin)], status_code=201)
 def add_tx(t: Tx):
     try: date.fromisoformat(t.due)
     except ValueError: raise HTTPException(400, "Data de vencimento inválida.")
+    if t.department_id is not None and t.kind != "pagar":
+        raise HTTPException(400, "Somente despesas podem ser vinculadas a um setor.")
     with db() as c:
-        cur = c.execute("INSERT INTO transactions(kind,description,amount,due) VALUES(?,?,?,?)",
-                        (t.kind, t.description, t.amount, t.due))
+        if t.department_id is not None and not c.execute(
+            "SELECT 1 FROM departments WHERE id=?", (t.department_id,)
+        ).fetchone():
+            raise HTTPException(404, "Setor não encontrado.")
+        cur = c.execute("INSERT INTO transactions(kind,description,amount,due,department_id) VALUES(?,?,?,?,?)",
+                        (t.kind, t.description, t.amount, t.due, t.department_id))
     return {"id": cur.lastrowid}
 
 @app.get("/finance", dependencies=[Depends(admin)])
 def list_tx(status: str = "open"):
     q = {"open": "WHERE paid=0", "paid": "WHERE paid=1"}.get(status, "")
     with db() as c:
-        return rows(c.execute(f"SELECT * FROM transactions {q} ORDER BY due, id"))
+        return rows(c.execute(f"SELECT t.*,d.name AS department FROM transactions t LEFT JOIN departments d ON d.id=t.department_id {q.replace('paid=', 't.paid=')} ORDER BY t.due,t.id"))
 
 @app.patch("/finance/{tid}/paid", dependencies=[Depends(admin)])
 def pay_tx(tid: int):
@@ -447,6 +457,84 @@ def finance_summary():
     return {"receber_aberto": total("receber"), "pagar_aberto": total("pagar"),
             "receber_vencido": total("receber", True), "pagar_vencido": total("pagar", True),
             "folha_mensal": folha, "fluxo": flow}
+
+def department_costs(month: Optional[str] = None):
+    ym = month or local(utcnow()).strftime("%Y-%m")
+    month_bounds(ym)
+    first_day = date.fromisoformat(ym + "-01")
+    next_month = (first_day + timedelta(days=32)).replace(day=1).isoformat()
+    payroll_data = payroll(ym)
+    with db() as c:
+        departments = rows(c.execute("SELECT id,name FROM departments ORDER BY name"))
+        expenses = rows(c.execute("""SELECT department_id,
+            SUM(CASE WHEN paid=1 THEN amount ELSE 0 END) AS paid,
+            SUM(CASE WHEN paid=0 THEN amount ELSE 0 END) AS open
+            FROM transactions WHERE kind='pagar' AND due>=? AND due<? GROUP BY department_id""", (first_day.isoformat(), next_month)))
+    sectors = {d["id"]: {"department_id": d["id"], "name": d["name"], "paid": 0.0,
+                          "open": 0.0, "payroll": 0.0} for d in departments}
+    for expense in expenses:
+        did = expense["department_id"]
+        if did not in sectors:
+            sectors[did] = {"department_id": None, "name": "Sem setor", "paid": 0.0,
+                            "open": 0.0, "payroll": 0.0}
+        sectors[did]["paid"] = round(expense["paid"] or 0, 2)
+        sectors[did]["open"] = round(expense["open"] or 0, 2)
+    for employee in payroll_data["employees"]:
+        did = employee["department_id"]
+        if did not in sectors:
+            sectors[did] = {"department_id": None, "name": "Sem setor", "paid": 0.0,
+                            "open": 0.0, "payroll": 0.0}
+        sectors[did]["payroll"] += employee["company_cost"]
+    items = []
+    for sector in sectors.values():
+        sector["payroll"] = round(sector["payroll"], 2)
+        sector["expenses"] = round(sector["paid"] + sector["open"], 2)
+        sector["total"] = round(sector["expenses"] + sector["payroll"], 2)
+        items.append(sector)
+    items.sort(key=lambda sector: (-sector["total"], sector["name"]))
+    return {"month": ym, "departments": items,
+            "totals": {"paid": round(sum(item["paid"] for item in items), 2),
+                       "open": round(sum(item["open"] for item in items), 2),
+                       "payroll": round(sum(item["payroll"] for item in items), 2),
+                       "total": round(sum(item["total"] for item in items), 2)}}
+
+@app.get("/finance/department-costs", dependencies=[Depends(admin)])
+def get_department_costs(month: Optional[str] = None):
+    return department_costs(month)
+
+class FinanceAnalysisIn(BaseModel):
+    month: Optional[str] = None
+
+@app.post("/finance/department-summary", dependencies=[Depends(admin)])
+def summarize_department_costs(request_data: FinanceAnalysisIn):
+    api_key = os.getenv("XAI_API_KEY")
+    if not api_key:
+        raise HTTPException(503, "O resumo por IA não está ativado neste ambiente. Os custos continuam disponíveis no gráfico.")
+    costs = department_costs(request_data.month)
+    prompt = ("Analise os custos mensais por setor da empresa e responda em português brasileiro. "
+              "Use somente os totais fornecidos, não invente causas nem recomendações sem evidência. "
+              "Dê uma visão geral curta e depois uma linha por setor, destacando folha, despesas pagas e abertas. "
+              "Sinalize concentrações relevantes e custos ainda sem setor. Dados: "
+              + json.dumps(costs, ensure_ascii=False, separators=(",", ":")))
+    body = json.dumps({"model": "grok-4.7", "store": False, "max_output_tokens": 450,
+                       "input": [{"role": "system", "content": "Você é um analista financeiro cuidadoso. Diferencie fatos de recomendações e seja conciso."},
+                                 {"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request("https://api.x.ai/v1/responses", data=body,
+                                 headers={"Authorization": f"Bearer {api_key}",
+                                          "Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(502, f"O serviço de IA respondeu com erro ({exc.code}).") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise HTTPException(502, "Não foi possível conectar ao serviço de IA.") from exc
+    text = "\n".join(part["text"] for item in result.get("output", [])
+                     if item.get("type") == "message"
+                     for part in item.get("content", []) if part.get("type") == "output_text").strip()
+    if not text:
+        raise HTTPException(502, "O serviço de IA não retornou um resumo.")
+    return {"month": costs["month"], "summary": text}
 
 # ---------- Matéria-prima ----------
 class MaterialIn(BaseModel):

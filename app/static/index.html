@@ -2,27 +2,25 @@
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Flux Gestão</title>
-<script>try{document.documentElement.dataset.theme=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}catch(e){}</script>
+<script>document.documentElement.dataset.theme='light';try{localStorage.setItem('theme','light')}catch(e){}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Fraunces:wght@500;600&display=swap">
 <style>
-:root{--bg:#F8F9FA;--ink:#1A1A1A;--mute:#5C636A;--card:rgba(255,255,255,.88);--line:rgba(26,26,26,.08);--y:#0066FF;--o:#FFC107;--g:#28A745;--r:#DC3545;--b:#0066FF;--btn-ink:#FFFFFF;--inp:rgba(255,255,255,.92);--hair:rgba(26,26,26,.12);--shine:rgba(255,255,255,.95);--ease:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.56,.64,1);color-scheme:light}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121212;--ink:#F2F2F2;--mute:#A3A3A3;--card:rgba(28,28,28,.82);--line:rgba(255,255,255,.08);--inp:rgba(255,255,255,.06);--shine:rgba(255,255,255,.07);--hair:rgba(255,255,255,.12);color-scheme:dark}}
-:root[data-theme="dark"]{--bg:#121212;--ink:#F2F2F2;--mute:#A3A3A3;--card:rgba(28,28,28,.82);--line:rgba(255,255,255,.08);--inp:rgba(255,255,255,.06);--shine:rgba(255,255,255,.07);--hair:rgba(255,255,255,.12);color-scheme:dark}
+:root{--bg:#F3F8F5;--ink:#35453E;--mute:#74827B;--card:rgba(255,255,255,.94);--line:rgba(80,126,103,.13);--y:#5E9D7C;--o:#D6A458;--g:#5B9B77;--r:#CF7771;--b:#7799B8;--btn-ink:#FFFFFF;--inp:#FFFFFF;--hair:rgba(80,126,103,.18);--shine:#F9FCFA;--ease:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.56,.64,1);color-scheme:light}
 *{box-sizing:border-box}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 html.tt *,html.tt *::before,html.tt *::after{transition-property:background-color,color,border-color,fill,stroke,box-shadow!important;transition-duration:.5s!important}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px Outfit,system-ui,sans-serif;min-height:100vh;overflow-x:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-font-smoothing:antialiased}
+body{margin:0;background:linear-gradient(135deg,#F3F8F5 0%,#F7F8FC 52%,#FFF7F2 100%);color:var(--ink);font:14px Outfit,system-ui,sans-serif;min-height:100vh;overflow-x:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-font-smoothing:antialiased}
 button:focus-visible,input:focus-visible,select:focus-visible,.task:focus-visible{outline:2px solid var(--b);outline-offset:2px}
 
-/* ---------- Fundo: três manchas de luz que flutuam devagar ---------- */
+/* ---------- Fundo atmosférico em camadas, animado apenas por transform ---------- */
 .orbs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
 .orbs i{position:absolute;border-radius:50%;will-change:transform}
-.orbs i:nth-child(1){width:640px;height:640px;left:calc(55% - 320px);top:calc(28% - 320px);background:radial-gradient(closest-side,rgba(0,102,255,.38),transparent);animation:d1 28s ease-in-out infinite alternate}
-.orbs i:nth-child(2){width:780px;height:780px;left:-280px;top:-280px;background:radial-gradient(closest-side,rgba(79,70,229,.28),transparent);animation:d2 34s ease-in-out infinite alternate}
-.orbs i:nth-child(3){width:620px;height:620px;right:-240px;top:calc(60% - 310px);background:radial-gradient(closest-side,rgba(255,193,7,.18),transparent);animation:d3 30s ease-in-out infinite alternate}
-@keyframes d1{to{transform:translate(-110px,80px) scale(1.12)}}
-@keyframes d2{to{transform:translate(120px,90px) scale(1.08)}}
-@keyframes d3{to{transform:translate(-80px,-100px) scale(1.15)}}
+.orbs i:nth-child(1){width:420px;height:420px;left:calc(62% - 210px);top:calc(20% - 210px);background:radial-gradient(closest-side,rgba(120,182,148,.22),transparent);animation:d1 38s ease-in-out infinite alternate}
+.orbs i:nth-child(2){width:520px;height:520px;left:-300px;top:calc(72% - 260px);background:radial-gradient(closest-side,rgba(145,175,199,.2),transparent);animation:d2 46s ease-in-out infinite alternate}
+.orbs i:nth-child(3){width:360px;height:360px;right:-180px;top:calc(76% - 180px);background:radial-gradient(closest-side,rgba(232,162,142,.17),transparent);animation:d3 42s ease-in-out infinite alternate}
+@keyframes d1{to{transform:translate3d(-42px,34px,0) scale(1.06)}}
+@keyframes d2{to{transform:translate3d(38px,-28px,0) scale(1.04)}}
+@keyframes d3{to{transform:translate3d(-32px,-36px,0) scale(1.05)}}
 
 #root{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:14px}
 #root>.out{animation:out .26s ease-in forwards}
@@ -36,20 +34,21 @@ nav::-webkit-scrollbar{display:none}
 .app nav{animation:navIn .7s var(--ease) backwards}
 @keyframes navIn{from{opacity:0;transform:translateY(-16px)}}
 .logo{font:600 22px Fraunces,Georgia,serif;margin-right:4px;display:flex;align-items:center;gap:8px;flex:none}
-.mk{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,#0066FF,#4F46E5);display:inline-block}
+.mk{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,#78B694,#E8A28E);display:inline-block}
 .login .mk{animation:breathe 3.4s ease-in-out infinite}
-@keyframes breathe{50%{transform:scale(1.45);box-shadow:0 0 0 7px rgba(0,102,255,.2)}}
+@keyframes breathe{50%{transform:scale(1.45);box-shadow:0 0 0 7px rgba(120,182,148,.2)}}
 .tabs,.seg{position:relative;display:flex;flex-wrap:nowrap;gap:2px;padding:4px;border-radius:99px;background:var(--card);border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);flex:none}
-.pill{position:absolute;top:4px;left:0;height:calc(100% - 8px);width:0;border-radius:99px;background:var(--ink);box-shadow:0 4px 14px rgba(30,40,60,.25);transition:transform .55s var(--ease),width .55s var(--ease),background-color .5s;pointer-events:none}
+.pill{position:absolute;top:4px;left:0;height:calc(100% - 8px);width:0;border-radius:99px;background:#DCEDE3;box-shadow:0 3px 10px rgba(80,126,103,.12);transition:transform .55s var(--ease),width .55s var(--ease),background-color .5s;pointer-events:none}
 .tabs button,.seg button{position:relative;z-index:1;border:0;background:none;color:var(--ink);padding:8px 14px;border-radius:99px;font:500 13px Outfit,sans-serif;cursor:pointer;white-space:nowrap;transition:color .35s var(--ease)}
-.tabs button.on,.seg button.on{color:var(--bg)}
+.tabs button.on,.seg button.on{color:#456B55}
 .seg{margin:12px 0 4px}.seg button{flex:1}
 button.chip{border:1px solid var(--line);background:var(--card);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);color:var(--ink);padding:8px 14px;border-radius:99px;font:500 13px Outfit,sans-serif;cursor:pointer;white-space:nowrap;transition:transform .25s var(--ease),box-shadow .25s}
 button.chip:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(30,40,60,.1)}
 button.chip:active{transform:scale(.95)}
+.btn:active,.tabs button:active,.seg button:active{transform:scale(.96)}
+.btn:focus-visible,button.chip:focus-visible{outline:2px solid var(--b);outline-offset:3px}
 button.chip.ico{padding:8px 10px;display:grid;place-items:center}
 .tg{transition:transform .7s var(--spring)}
-html[data-theme="dark"] .tg{transform:rotate(180deg)}
 .sp{flex:1}
 
 /* ---------- Tipografia e cartões ---------- */
@@ -67,14 +66,15 @@ h1{font:500 30px Fraunces,Georgia,serif;margin:22px 0 2px;letter-spacing:-.4px}
 .bar{height:8px;border-radius:9px;background:var(--hair);overflow:hidden;margin:8px 0}.bar b{display:block;height:100%;background:var(--g);border-radius:9px}
 .stack{display:flex;height:22px;border-radius:7px;overflow:hidden;margin:10px 0 8px;gap:2px}.stack i{display:block;min-width:2px}
 .leg{display:flex;flex-wrap:wrap;gap:6px 16px;color:var(--mute);font-size:12px}.leg b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px}
+.cost-chart{display:grid;gap:14px;margin-top:12px}.cost-row{display:grid;grid-template-columns:minmax(90px,150px) minmax(120px,1fr) minmax(95px,auto);align-items:center;gap:12px;animation:chartRowIn .55s var(--ease) both;animation-delay:calc(var(--chart-index,0)*90ms)}.cost-name{overflow-wrap:anywhere}.cost-track{height:18px;display:flex;background:var(--hair);border-radius:4px;overflow:hidden}.cost-track i{height:100%;min-width:0;transform-origin:left center;animation:chartGrow .85s var(--ease) both;animation-delay:calc(var(--chart-index,0)*90ms + 130ms)}.cost-track .paid{background:#70B88B}.cost-track .open{background:#E9C270}.cost-track .payroll{background:#91AFC7}.cost-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.ai-summary{white-space:pre-line;line-height:1.65;margin:0;color:var(--ink)}
+@keyframes chartRowIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+@keyframes chartGrow{from{transform:scaleX(.03);opacity:.45}to{transform:scaleX(1);opacity:1}}
 .gauge{display:block;margin:0 auto;max-width:210px;width:100%}
 table{width:100%;border-collapse:collapse}th{text-align:left;font-weight:500;color:var(--mute);font-size:12px;padding:6px 8px}td{padding:9px 8px;border-top:1px solid var(--hair);transition:background-color .25s}.tw{overflow-x:auto}
-tr:hover>td{background:rgba(0,102,255,.07)}
-.tag{padding:2px 9px;border-radius:99px;font-size:11px;background:rgba(40,167,69,.18);color:var(--g);transition:background-color .4s,color .4s}.tag.w{background:rgba(255,193,7,.22);color:#996C00}.tag.x{background:rgba(220,53,69,.16);color:var(--r)}
-:root[data-theme="dark"] .tag.w{color:#FFC107}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .tag.w{color:#FFC107}}
+tr:hover>td{background:rgba(120,182,148,.1)}
+.tag{padding:2px 9px;border-radius:99px;font-size:11px;background:rgba(91,155,119,.16);color:#477D5D;transition:background-color .4s,color .4s}.tag.w{background:rgba(233,194,112,.24);color:#8A6A2D}.tag.x{background:rgba(207,119,113,.16);color:#A85450}
 .btn{position:relative;background:var(--y);border:0;color:var(--btn-ink);padding:9px 16px;border-radius:99px;font:600 13px Outfit,sans-serif;cursor:pointer;transition:transform .25s var(--ease),box-shadow .3s}
-.btn:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(0,102,255,.28)}
+.btn:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(94,157,124,.25)}
 .btn:active{transform:scale(.97)}
 .btn.l{width:100%;padding:15px;font-size:16px;margin-top:12px}
 .busy{pointer-events:none;color:transparent!important}
@@ -84,7 +84,7 @@ tr:hover>td{background:rgba(0,102,255,.07)}
 .shake{animation:shake .45s}
 @keyframes shake{20%{transform:translateX(-7px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(2px)}}
 input,select{font:inherit;color:var(--ink);background:var(--inp);border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:100%;min-width:70px;transition:border-color .25s,box-shadow .25s,background-color .5s}
-input:focus,select:focus{outline:0;border-color:var(--y);box-shadow:0 0 0 4px rgba(0,102,255,.22)}
+input:focus,select:focus{outline:0;border-color:var(--y);box-shadow:0 0 0 4px rgba(94,157,124,.18)}
 input[type=checkbox]{accent-color:var(--y)}
 label{display:block;color:var(--mute);font-size:12px;margin:10px 0 4px}
 .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.row>*{flex:1}.row>.btn{flex:none}
@@ -156,11 +156,11 @@ main.leave{animation:leave .21s ease-in forwards}
 .animate tr{animation:rowIn .6s var(--ease) backwards;animation-delay:calc(var(--r,0)*40ms + 350ms)}
 @keyframes rowIn{from{opacity:0;transform:translateX(-10px)}}
 .flash{animation:flash 1.3s ease-out}
-@keyframes flash{from{background-color:rgba(0,102,255,.28)}}
+@keyframes flash{from{background-color:rgba(120,182,148,.25)}}
 .sk{height:110px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(100deg,var(--card) 30%,var(--shine) 50%,var(--card) 70%) 0 0/220% 100%;animation:shim 1.3s linear infinite}
 @keyframes shim{to{background-position:-220% 0}}
 
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}.orbs i{will-change:auto}}
 @media print{.orbs,nav,#toast,.noprint,.seg{display:none!important}body{background:#fff;color:#000}.card{background:#fff;box-shadow:none;border:1px solid #ccc;backdrop-filter:none}}
 </style></head><body>
 <div class="orbs" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -200,7 +200,6 @@ async function api(path,method='GET',body){
 const run=async(f,btn)=>{if(btn){if(btn.classList.contains('busy'))return;btn.classList.add('busy')}
  try{await f()}catch(e){toast(e.message,'no');if(btn&&btn.isConnected)shake(btn)}finally{if(btn&&btn.isConnected)btn.classList.remove('busy')}};
 function sair(local){if(!local)api('/auth/logout','POST').catch(()=>{});TOKEN=null;try{sessionStorage.removeItem('tk')}catch(e){}tela()}
-function tema(){const r=document.documentElement,n=r.dataset.theme=='dark'?'light':'dark';r.classList.add('tt');r.dataset.theme=n;try{localStorage.setItem('theme',n)}catch(e){}clearTimeout(tema.t);tema.t=setTimeout(()=>r.classList.remove('tt'),650)}
 function pos(){return new Promise((ok,er)=>{if(!navigator.geolocation)return er(new Error('Seu navegador não tem localização.'));navigator.geolocation.getCurrentPosition(ok,()=>er(new Error('Ative o GPS e permita o acesso à localização.')),{enableHighAccuracy:true,timeout:15000})})}
 
 /* ---------- Troca de tela raiz (login ⇄ painel) ---------- */
@@ -266,7 +265,7 @@ const tabs=[['painel','Painel'],['quadros','Quadros'],['custeio','Custeio'],['ma
 const SKEL='<div class="sk" style="height:44px;width:min(300px,60%);margin:22px 0 14px"></div><div class="grid g2"><div class="sk"></div><div class="sk"></div></div><div class="sk" style="margin-top:12px;height:170px"></div>';
 async function app(){
  if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>Flux</span><div class="tabs" id="tabs"><i class="pill"></i>${tabs.map(t=>`<button data-t="${t[0]}" class="${S.tab==t[0]?'on':''}" onclick="go('${t[0]}')">${t[1]}</button>`).join('')}</div><span class="sp"></span>
- <button class="chip ico" title="Alternar tema" aria-label="Alternar tema" onclick="tema()"><svg class="tg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="7.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 2.8a7.2 7.2 0 0 0 0 14.4z" fill="currentColor"/></svg></button><button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
+ <button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
  placeAll(true);go(S.tab,{first:true})}
 function markTabs(anim){document.querySelectorAll('#tabs button').forEach(b=>{const on=b.dataset.t==S.tab;b.classList.toggle('on',on);on?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current')});
  placePill($('#tabs'),!anim);const n=$('nav'),a=$('#tabs .on');if(n&&a&&n.scrollWidth>n.clientWidth)n.scrollTo({left:a.offsetLeft-n.clientWidth/2+a.offsetWidth/2+$('#tabs').offsetLeft,behavior:still()?'auto':'smooth'})}
@@ -298,7 +297,7 @@ async function go(tab,o={}){if(!TOKEN)return;const main=$('#main');if(!main)retu
  main.className='';main.innerHTML=html;placeAll(true);o.soft?settle(main,before):play(main,dir)}
 const refresh=()=>go(S.tab,{soft:true});
 const sparks=a=>{const m=Math.max(...a,1);return '<div class="spark">'+a.map(v=>`<i style="height:${Math.max(7,v/m*100)}%"></i>`).join('')+'</div>'};
-function gauge(p){return `<svg class="gauge" viewBox="0 0 160 100"><defs><linearGradient id="gg" x1="0" x2="1"><stop offset="0" stop-color="#FFC107"/><stop offset=".55" stop-color="#28A745"/><stop offset="1" stop-color="#0066FF"/></linearGradient></defs>
+function gauge(p){return `<svg class="gauge" viewBox="0 0 160 100"><defs><linearGradient id="gg" x1="0" x2="1"><stop offset="0" stop-color="#E9C270"/><stop offset=".55" stop-color="#70B88B"/><stop offset="1" stop-color="#91AFC7"/></linearGradient></defs>
 <path d="M12 84A68 68 0 0 1 148 84" fill="none" stroke="rgba(120,130,150,.25)" stroke-width="14" stroke-linecap="round" pathLength="100"/>
 <path class="gfill" d="M12 84A68 68 0 0 1 148 84" fill="none" stroke="url(#gg)" stroke-width="14" stroke-linecap="round" pathLength="100" stroke-dasharray="${Math.max(p,.5)} 100"/>
 <text class="cnt" data-v="${p}" data-f="p" x="80" y="72" text-anchor="middle" font-size="24" fill="currentColor" font-family="Outfit">${Math.round(p)}%</text><text x="80" y="88" text-anchor="middle" font-size="9" fill="var(--mute)">das tarefas</text></svg>`}
@@ -313,7 +312,7 @@ const KND={gestao:'Gestão',producao:'Produção',pessoas:'Pessoas',financeiro:'
 const INT={webhook:'Webhook',csv:'CSV',whatsapp:'WhatsApp',erp:'ERP'};
 function tagOf(map,k){const x=map[k]||[k,'w'];return `<span class="tag ${x[1]}">${x[0]}</span>`}
 function prog(p){p=+p||0;return `<div class="bar" style="margin:0;min-width:72px"><b style="width:${p}%"></b></div>`}
-function av(n){const s=esc((n||'A')[0].toUpperCase());return `<span class="tag" style="background:rgba(0,102,255,.16);color:var(--b)">${s}</span> ${esc(n||'—')}`}
+function av(n){const s=esc((n||'A')[0].toUpperCase());return `<span class="tag" style="background:rgba(145,175,199,.22);color:#607E97">${s}</span> ${esc(n||'—')}`}
 function dreCards(d){const neg=d.lucro<0;return `<div class="grid k4" style="margin-top:12px">
 <div class="card"><h3>Receita bruta</h3><span class="big">${cnt(d.receita,'R')}</span></div>
 <div class="card"><h3>Consumo matéria-prima</h3><span class="big">${cnt(d.materia,'R')}</span></div>
@@ -329,7 +328,7 @@ async function painel(){
  const lots=d.lots||[];
  return `<h1>${saudacao()}, gestor</h1><p class="sub">${n?`${n} ${n==1?'pessoa está':'pessoas estão'} trabalhando agora.`:'Tarefas, custos, equipe e ponto em um só lugar.'}</p>
 <div class="grid g2"><div class="card"><h3>Primeiros passos · ${ok} de 6</h3><div class="bar"><b style="width:${ok/6*100}%"></b></div><ul class="steps">${steps.map(s=>s[0]?`<li class="done">${CK}<span>${s[1]}</span></li>`:`<li><button onclick="go('${s[2]}')">${CK}<span class="st">${s[1]}</span></button></li>`).join('')}</ul></div>
-<div class="card"><h3>Meta de tarefas</h3>${gauge(pct)}<div class="row" style="justify-content:center;gap:14px"><span class="tag w">A fazer ${T[0]}</span><span class="tag w" style="background:rgba(0,102,255,.16);color:var(--b)">Andamento ${T[1]}</span><span class="tag">Concluídas ${T[2]}</span></div></div></div>
+<div class="card"><h3>Meta de tarefas</h3>${gauge(pct)}<div class="row" style="justify-content:center;gap:14px"><span class="tag w">A fazer ${T[0]}</span><span class="tag" style="background:rgba(145,175,199,.22);color:#607E97">Andamento ${T[1]}</span><span class="tag">Concluídas ${T[2]}</span></div></div></div>
 <h1 class="lh1">Eficiência operacional & DRE sintético</h1>
 <p class="sub">Consolidado das análises de custo registradas${dr.n?` · ${dr.n} ${dr.n==1?'painel':'painéis'}`:''}.</p>
 ${dreCards(dr)}
@@ -393,15 +392,20 @@ async function addE(){const n=$('#en').value.trim();if(!n)return toast('Digite o
 
 const dbr=d=>d.split('-').reverse().join('/');
 TAB.financeiro=financeiro;
-async function financeiro(){const [s,T]=await Promise.all([api('/finance/summary'),api('/finance?status=open')]),hoje=new Date().toLocaleDateString('sv');
+async function financeiro(){const month=S.financeMonth||new Date().toISOString().slice(0,7);S.financeMonth=month;
+ const [s,T,D,costs]=await Promise.all([api('/finance/summary'),api('/finance?status=open'),api('/departments'),api('/finance/department-costs?month='+month)]),hoje=new Date().toLocaleDateString('sv');
+ const maxCost=Math.max(...costs.departments.map(d=>d.total),1),parts=[['Pago','paid'],['Em aberto','open'],['Folha','payroll']];
+ const chart=costs.departments.length?`<div class="cost-chart" role="img" aria-label="Custos mensais por setor, separados entre despesas pagas, em aberto e folha">${costs.departments.map((d,i)=>`<div class="cost-row" style="--chart-index:${i}"><b class="cost-name">${esc(d.name)}</b><div class="cost-track" aria-hidden="true">${parts.map(p=>`<i class="${p[1]}" style="width:${d[p[1]]/maxCost*100}%" title="${p[0]}: ${R(d[p[1]])}"></i>`).join('')}</div><b class="cost-value">${R(d.total)}</b></div>`).join('')}</div>`:'<p class="sub">Nenhum setor ou custo para esta competência.</p>';
  return `<h1>Financeiro</h1><p class="sub">Contas a pagar e a receber. A previsão de caixa já desconta a folha do mês.</p>
 <div class="grid k4"><div class="card"><h3>A receber</h3><span class="big">${cnt(s.receber_aberto,'R')}</span><span class="d">${R(s.receber_vencido)} vencido</span></div><div class="card"><h3>A pagar</h3><span class="big">${cnt(s.pagar_aberto,'R')}</span><span class="d">${R(s.pagar_vencido)} vencido</span></div><div class="card"><h3>Folha mensal</h3><span class="big">${cnt(s.folha_mensal,'R')}</span></div></div>
+<div class="card" style="margin-top:12px"><div class="row" style="align-items:center;margin:0"><h3 style="margin:0;flex:1">Custeio mensal por setor</h3><input type="month" value="${month}" aria-label="Competência dos custos" onchange="S.financeMonth=this.value;refresh()"></div><div class="leg" style="margin-top:12px">${parts.map(p=>`<span><b style="background:var(--${p[1]=='paid'?'g':p[1]=='open'?'o':'b'})"></b>${p[0]}</span>`).join('')}</div>${chart}<div class="row"><span class="sub" style="margin:0;flex:1">Total no mês: <b>${R(costs.totals.total)}</b> · despesas pagas ${R(costs.totals.paid)} · em aberto ${R(costs.totals.open)} · folha ${R(costs.totals.payroll)}</span><button class="btn" onclick="run(resumirSetores,this)">Resumir com IA</button></div><div id="finance-ai" aria-live="polite"></div></div>
 <div class="card tw" style="margin-top:12px"><h3>Fluxo de caixa previsto</h3><table><tr><th>Mês</th><th>A receber</th><th>A pagar</th><th>Folha</th><th>Saldo</th></tr>${s.fluxo.map(f=>`<tr><td>${f.month.split('-').reverse().join('/')}</td><td>${R(f.receber)}</td><td>${R(f.pagar)}</td><td>${R(f.folha)}</td><td><span class="tag ${f.saldo<0?'x':''}">${R(f.saldo)}</span></td></tr>`).join('')}</table></div>
-<div class="card tw" style="margin-top:12px"><h3>Lançamentos em aberto</h3>${T.length?`<table><tr><th>Tipo</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th></th></tr>${T.map(t=>`<tr data-k="x${t.id}"><td><span class="tag ${t.kind=='pagar'?'w':''}">${t.kind=='pagar'?'Pagar':'Receber'}</span></td><td>${esc(t.description)}</td><td>${dbr(t.due)}${t.due<hoje?' <span class="tag x">vencido</span>':''}</td><td>${R(t.amount)}</td><td style="white-space:nowrap"><button class="chip" onclick="run(()=>payT(${t.id}),this)">${t.kind=='pagar'?'Marcar como pago':'Marcar como recebido'}</button> <button class="chip" onclick="run(()=>delTx(${t.id}),this)" title="Excluir lançamento" aria-label="Excluir lançamento">×</button></td></tr>`).join('')}</table>`:'<p class="sub">Nenhum lançamento em aberto. Adicione o primeiro abaixo.</p>'}</div>
-<div class="card" style="margin-top:12px"><h3>Novo lançamento</h3><div class="row"><select id="fk" aria-label="Tipo"><option value="receber">A receber</option><option value="pagar">A pagar</option></select><input id="fd" placeholder="Descrição"><input id="fv" type="number" min="0" step="0.01" placeholder="Valor"><input id="ft" type="date" aria-label="Vencimento"></div><div class="row"><button class="btn" onclick="run(addTx,this)">Adicionar lançamento</button></div></div>`}
+<div class="card tw" style="margin-top:12px"><h3>Lançamentos em aberto</h3>${T.length?`<table><tr><th>Tipo</th><th>Descrição</th><th>Setor</th><th>Vencimento</th><th>Valor</th><th></th></tr>${T.map(t=>`<tr data-k="x${t.id}"><td><span class="tag ${t.kind=='pagar'?'w':''}">${t.kind=='pagar'?'Pagar':'Receber'}</span></td><td>${esc(t.description)}</td><td>${esc(t.department||'—')}</td><td>${dbr(t.due)}${t.due<hoje?' <span class="tag x">vencido</span>':''}</td><td>${R(t.amount)}</td><td style="white-space:nowrap"><button class="chip" onclick="run(()=>payT(${t.id}),this)">${t.kind=='pagar'?'Marcar como pago':'Marcar como recebido'}</button> <button class="chip" onclick="run(()=>delTx(${t.id}),this)" title="Excluir lançamento" aria-label="Excluir lançamento">×</button></td></tr>`).join('')}</table>`:'<p class="sub">Nenhum lançamento em aberto. Adicione o primeiro abaixo.</p>'}</div>
+<div class="card" style="margin-top:12px"><h3>Novo lançamento</h3><div class="row"><select id="fk" aria-label="Tipo" onchange="$('#fdep').disabled=this.value!='pagar'"><option value="receber">A receber</option><option value="pagar">A pagar</option></select><input id="fd" placeholder="Descrição"><input id="fv" type="number" min="0" step="0.01" placeholder="Valor"><input id="ft" type="date" aria-label="Vencimento"><select id="fdep" aria-label="Setor da despesa" disabled><option value="">Sem setor</option>${D.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div><div class="row"><button class="btn" onclick="run(addTx,this)">Adicionar lançamento</button></div></div>`}
+async function resumirSetores(btn){const out=$('#finance-ai');out.innerHTML='<p class="sub" role="status">Analisando os custos desta competência…</p>';try{const result=await api('/finance/department-summary','POST',{month:S.financeMonth});out.innerHTML=`<p class="ai-summary">${esc(result.summary)}</p>`}catch(e){out.innerHTML=`<p class="msg no" role="alert">${esc(e.message)}</p>`;throw e}}
 async function payT(id){await api(`/finance/${id}/paid`,'PATCH');await gone($(`[data-k="x${id}"]`));await refresh()}
 async function delTx(id){await api('/finance/'+id,'DELETE');await gone($(`[data-k="x${id}"]`));await refresh()}
-async function addTx(){const d=$('#fd').value.trim(),v=+$('#fv').value,t=$('#ft').value;if(!d||!v||!t)return toast('Preencha descrição, valor e vencimento.','no');await api('/finance','POST',{kind:$('#fk').value,description:d,amount:v,due:t});await refresh()}
+async function addTx(){const d=$('#fd').value.trim(),v=+$('#fv').value,t=$('#ft').value,k=$('#fk').value;if(!d||!v||!t)return toast('Preencha descrição, valor e vencimento.','no');await api('/finance','POST',{kind:k,description:d,amount:v,due:t,department_id:k=='pagar'?(+$('#fdep').value||null):null});await refresh()}
 
 TAB.ponto=ponto;
 async function ponto(){let w=null,co={name:'',cnpj:''};try{w=await api('/settings/workplace')}catch(e){}try{co=await api('/settings/company')}catch(e){}
