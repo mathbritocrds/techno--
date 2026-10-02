@@ -18,8 +18,6 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.abspath(os.getenv("DB_PATH") or os.path.join(APP_DIR, "..", "data", "flux.db"))
 os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")                    # opcional: acesso direto via API (vazio = desligado)
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")      # TROQUE em produção
 SESSION_HOURS = 12
 TZ_OFFSET = float(os.getenv("TZ_OFFSET_HOURS", "-3"))         # fuso da empresa (Brasília = -3)
 MAX_GPS_ERROR_M = 50      # GPS impreciso demais é recusado
@@ -143,22 +141,66 @@ def admin(authorization: str = Header(default=""), x_admin_token: str = Header(d
         return
     raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
 
-# ---------- Login ----------
-if ADMIN_PASSWORD == "admin123":
-    print("AVISO: senha padrão do administrador em uso. Defina ADMIN_PASSWORD antes de publicar.")
-with db() as c:
-    if not c.execute("SELECT 1 FROM admins").fetchone():
-        _salt = secrets.token_hex(16)
-        c.execute("INSERT INTO admins VALUES(?,?,?)", (ADMIN_USER.lower(), _salt, hash_pin(ADMIN_PASSWORD, _salt)))
-
+# ---------- Conta da empresa e login ----------
 _fails: dict = {}
 
 class Login(BaseModel):
-    user: str; password: str
+    password: str
+    user: str = ""
+    email: str = ""
+
+class Registration(BaseModel):
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=8, max_length=128)
+    company_name: str = Field(min_length=2, max_length=160)
+    cnpj: str = Field(default="", pattern=r"^(\d{14})?$")
+
+def session_user(c, authorization, now):
+    if not authorization.startswith("Bearer "):
+        return None
+    token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
+    session = c.execute("SELECT user,expires FROM sessions WHERE token=?", (token_hash,)).fetchone()
+    return session["user"] if session and session["expires"] > now else None
+
+@app.get("/auth/status")
+def auth_status():
+    with db() as c:
+        setup_required = not c.execute("SELECT 1 FROM admins LIMIT 1").fetchone()
+    return {"setup_required": setup_required}
+
+@app.post("/auth/register", status_code=201)
+def register_account(b: Registration, authorization: str = Header(default="")):
+    email, now = b.email.strip().lower(), time.time()
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        account_exists = bool(c.execute("SELECT 1 FROM admins LIMIT 1").fetchone())
+        creator = session_user(c, authorization, now)
+        if account_exists and not creator:
+            raise HTTPException(401, "Entre como administrador para criar outro acesso.")
+        if c.execute("SELECT 1 FROM admins WHERE user=?", (email,)).fetchone():
+            raise HTTPException(409, "Este e-mail já possui acesso.")
+        current = settings(c)
+        company_name = current.get("co_name", "").strip()
+        company_cnpj = current.get("co_cnpj", "").strip()
+        if company_name and (company_name.casefold() != b.company_name.strip().casefold()
+                             or company_cnpj != b.cnpj):
+            raise HTTPException(409, "Esta instalação já pertence a outra empresa.")
+        salt = secrets.token_hex(16)
+        c.execute("INSERT INTO admins(user,salt,hash) VALUES(?,?,?)",
+                  (email, salt, hash_pin(b.password, salt)))
+        if not company_name:
+            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('co_name',?)", (b.company_name.strip(),))
+            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('co_cnpj',?)", (b.cnpj,))
+        token = None
+        if not account_exists:
+            token = secrets.token_urlsafe(32)
+            c.execute("INSERT INTO sessions VALUES(?,?,?)",
+                      (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600))
+    return {"email": email, "token": token}
 
 @app.post("/auth/login")
 def login(b: Login):
-    k, now = b.user.strip().lower(), time.time()
+    k, now = (b.email or b.user).strip().lower(), time.time()
     n, t = _fails.get(k, (0, 0))
     if n >= 5 and now - t < 300:
         raise HTTPException(429, "Muitas tentativas. Aguarde 5 minutos.")

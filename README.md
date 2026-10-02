@@ -7,13 +7,12 @@ Sistema de gestão com visual Flux: quadros (kanban e tabela), custeio, matéria
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export ADMIN_USER=admin ADMIN_PASSWORD='uma-senha-forte'
 # Opcional: habilita o resumo financeiro com Gemini
 export GEMINI_API_KEY='sua-chave-do-gemini'
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-Login padrão de testes: `admin` / `admin123`.
+Na primeira execução, use **Criar conta da empresa** para registrar o e-mail, a senha e os dados da empresa. Nas instalações que já têm administrador, entre com a conta atual e use a aba **Conta** para criar novos acessos da mesma empresa. Senhas são armazenadas com hash; não há credenciais padrão para instalações novas.
 
 ## O que foi acrescentado (People Core)
 
@@ -26,6 +25,7 @@ Login padrão de testes: `admin` / `admin123`.
 - **Resumo financeiro com Gemini** usando `gemini-2.5-flash` por padrão. `GEMINI_MODEL` permite escolher outro modelo; a chave é lida apenas pelo servidor.
 - **Exportação financeira em CSV** para contas a pagar e receber, com neutralização de fórmulas em campos de texto.
 - **Funcionários**: cadastro na tela de Folha e exportação autenticada da lista em CSV.
+- **Contas por e-mail**: primeiro usuário configura a empresa; somente um administrador autenticado pode criar acessos adicionais na mesma instalação.
 - **Tema claro e escuro** com transição suave, preferência persistida no navegador e suporte ao tema do sistema.
 
 ## Persistência

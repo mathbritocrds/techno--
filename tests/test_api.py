@@ -19,9 +19,42 @@ def bater(eid, pin="1234", samples=None, consent=True):
 
 @pytest.fixture(scope="module")
 def auth():
-    r = client.post("/auth/login", json={"user": "admin", "password": "segredo-de-teste"})
-    assert r.status_code == 200
-    return {"Authorization": "Bearer " + r.json()["token"]}
+    if client.get("/auth/status").json()["setup_required"]:
+        r = client.post("/auth/register", json={"email": "admin@flux.test", "password": "segredo-de-teste",
+                                                "company_name": "Flux Ltda", "cnpj": "12345678000199"})
+        assert r.status_code == 201
+        token = r.json()["token"]
+    else:
+        r = client.post("/auth/login", json={"email": "admin@flux.test", "password": "segredo-de-teste"})
+        assert r.status_code == 200
+        token = r.json()["token"]
+    return {"Authorization": "Bearer " + token}
+
+def test_primeiro_cadastro_cria_empresa_e_login():
+    assert client.get("/auth/status").json() == {"setup_required": True}
+    response = client.post("/auth/register", json={"email": "admin@flux.test", "password": "segredo-de-teste",
+                                                    "company_name": "Flux Ltda", "cnpj": "12345678000199"})
+    assert response.status_code == 201 and response.json()["token"]
+    headers = {"Authorization": "Bearer " + response.json()["token"]}
+    assert client.get("/auth/status").json() == {"setup_required": False}
+    assert client.get("/settings/company", headers=headers).json() == {"name": "Flux Ltda", "cnpj": "12345678000199"}
+    assert client.post("/auth/register", json={"email": "intruso@flux.test", "password": "segredo-de-teste",
+                                                "company_name": "Outra Ltda"}).status_code == 401
+
+def test_criacao_de_acessos_limitada_a_empresa(auth):
+    payload = {"email": "pessoa@flux.test", "password": "outra-senha-segura", "company_name": "Flux Ltda",
+               "cnpj": "12345678000199"}
+    assert client.post("/auth/register", json=payload).status_code == 401
+    created = client.post("/auth/register", json=payload, headers=auth)
+    assert created.status_code == 201 and created.json()["token"] is None
+    assert client.post("/auth/register", json=payload, headers=auth).status_code == 409
+    other_company = {**payload, "email": "outra@flux.test", "company_name": "Outra Ltda", "cnpj": ""}
+    assert client.post("/auth/register", json=other_company, headers=auth).status_code == 409
+    assert client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]}).status_code == 200
+
+def test_login_legado_com_user(auth):
+    response = client.post("/auth/login", json={"user": "admin@flux.test", "password": "segredo-de-teste"})
+    assert response.status_code == 200
 
 @pytest.fixture(scope="module")
 def ana(auth):
@@ -175,8 +208,8 @@ def test_custos_por_setor_e_resumo_ia_sem_chave(auth, monkeypatch):
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1,
                                          "due": "2026-10-12", "department_id": 9999}, headers=auth).status_code == 404
 
-def test_logout_invalida_sessao():
-    tk = client.post("/auth/login", json={"user": "admin", "password": "segredo-de-teste"}).json()["token"]
+def test_logout_invalida_sessao(auth):
+    tk = client.post("/auth/login", json={"email": "admin@flux.test", "password": "segredo-de-teste"}).json()["token"]
     h = {"Authorization": "Bearer " + tk}
     assert client.get("/dashboard", headers=h).status_code == 200
     client.post("/auth/logout", headers=h)

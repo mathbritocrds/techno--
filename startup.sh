@@ -10,8 +10,6 @@ mkdir -p "$ROOT/data" "$ROOT/app/static"
 if ! python3 -c "import fastapi,uvicorn" 2>/dev/null; then
   pip3 install -q 'fastapi>=0.110' 'uvicorn[standard]>=0.29'
 fi
-export ADMIN_USER="${ADMIN_USER:-admin}"
-export ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 export TZ_OFFSET_HOURS="${TZ_OFFSET_HOURS:--3}"
 export DB_PATH="${DB_PATH:-$ROOT/data/flux.db}"
 nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload \

@@ -123,6 +123,7 @@ label{display:block;color:var(--mute);font-size:12px;margin:10px 0 4px}
 
 /* ---------- Mensagens, ponto ao vivo e comprovante ---------- */
 .login{min-height:90vh;display:grid;place-items:center}.lc{width:100%;max-width:380px}.login-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.theme-toggle{width:40px;height:40px;padding:0;font-size:18px}
+.lc.signup-card{max-width:540px}
 .login-tools{display:flex;align-items:center;gap:8px}.motion-control{display:flex;align-items:center;gap:7px;min-height:40px;padding:8px 10px;margin:0;border:1px solid var(--line);border-radius:99px;background:var(--card);color:var(--mute);font-size:12px;white-space:nowrap;cursor:pointer}.motion-control input{width:16px;min-width:16px;height:16px;margin:0;accent-color:var(--y)}
 .msg{padding:12px;border-radius:12px;margin-top:12px;font-weight:500;transition:background-color .4s,color .4s}
 .msg.in,.fi{animation:fi .55s var(--ease) backwards}
@@ -236,19 +237,24 @@ async function login(){stopWatch();
  <div id="lf"></div><div id="live" class="msg" style="display:none"></div><div id="lm"></div></div></div>`))return;
  placeAll(true);fillMode(true)}
 async function setMode(m){if(S.mode==m)return;S.mode=m;stopWatch();document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.m==m));placePill($('#seg'));fillMode()}
-const formG=`<label for="lu">Usuário</label><input id="lu" autocomplete="username" autocapitalize="none"><label for="ls">Senha</label><input id="ls" type="password" autocomplete="current-password" onkeydown="if(event.key=='Enter')run(entrar,$('#lf .btn'))"><button class="btn l" onclick="run(entrar,this)">Entrar</button>`;
+const formG=`<label for="lu">E-mail ou usuário</label><input id="lu" autocomplete="username" autocapitalize="none"><label for="ls">Senha</label><input id="ls" type="password" autocomplete="current-password" onkeydown="if(event.key=='Enter')run(entrar,$('#lf .btn'))"><button class="btn l" onclick="run(entrar,this)">Entrar</button>`;
 const formP=E=>E.length?`<label for="le">Seu nome</label><select id="le">${E.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select><label for="lp">PIN</label><input id="lp" type="password" inputmode="numeric" maxlength="8" autocomplete="off" onkeydown="if(event.key=='Enter')run(baterPonto,$('#lf .btn'))">
   <label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink);margin-top:14px"><input id="lc" type="checkbox" style="width:auto;min-width:0;margin-top:2px"><span>Autorizo o uso da localização deste aparelho somente enquanto registro o ponto.</span></label>
   <button class="btn l" onclick="run(baterPonto,this)">Registrar ponto</button>`:`<p class="sub" style="margin-top:14px">Nenhum funcionário cadastrado ainda. Peça ao gestor para cadastrar você.</p>`;
 async function fillMode(first){const id=++FILL,g=S.mode=='g',parts=['#lh','#lf'].map($);if(!parts[0])return;
  if(!first&&!still())parts.forEach(p=>p.className='fo');
- const [,E]=await Promise.all([first||still()?0:wait(160),g?[]:api('/clock/employees').catch(()=>[])]);
+ const [,E,status]=await Promise.all([first||still()?0:wait(160),g?[]:api('/clock/employees').catch(()=>[]),api('/auth/status')]);
  if(id!==FILL||!$('#lf'))return;
- $('#lt').textContent=g?'Bem-vindo de volta':'Bater ponto';
- $('#lsub').textContent=g?'Entre para ver como está o dia da equipe.':'Escolha seu nome, digite o PIN e confirme a localização.';
+ const setup=g&&status.setup_required;
+ $('#lt').textContent=setup?'Criar conta da empresa':g?'Bem-vindo de volta':'Bater ponto';
+ $('#lsub').textContent=setup?'Cadastre o primeiro acesso e os dados da empresa.':g?'Entre para ver como está o dia da equipe.':'Escolha seu nome, digite o PIN e confirme a localização.';
  $('#lm').innerHTML='';$('#live').style.display='none';
- $('#lf').innerHTML=g?formG:formP(E);parts.forEach(p=>p.className='fi')}
-async function entrar(){const j=await api('/auth/login','POST',{user:$('#lu').value,password:$('#ls').value});TOKEN=j.token;try{sessionStorage.setItem('tk',TOKEN)}catch(e){}S.tab='painel';tela()}
+ $('#seg').style.display=setup?'none':'';
+ $('#lf').innerHTML=g?(setup?'<button class="btn l" onclick="startRegistration()">Criar conta da empresa</button>':formG):formP(E);if(setup)$('#root .lc').classList.add('signup-card');parts.forEach(p=>p.className='fi')}
+function registrationFields(initial,company={}){const locked=company.name?'readonly':'';return `<div class="grid g2"><div><label for="rg">E-mail de acesso</label><input id="rg" type="email" autocomplete="email" maxlength="254" placeholder="voce@empresa.com" required></div><div><label for="rp">Senha (mínimo 8 caracteres)</label><input id="rp" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></div><div><label for="rc">Confirmar senha</label><input id="rc" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></div><div><label for="rco">Razão social</label><input id="rco" value="${esc(company.name||'')}" minlength="2" maxlength="160" ${locked} required></div><div><label for="rcnpj">CNPJ (opcional, 14 números)</label><input id="rcnpj" inputmode="numeric" maxlength="14" value="${esc(company.cnpj||'')}" ${locked}></div></div><div class="row"><button class="btn" onclick="run(()=>registerAccount(${initial}),this)">${initial?'Criar conta e entrar':'Criar acesso'}</button>${initial?'<button class="chip" onclick="login()">Voltar ao login</button>':''}</div><p id="register-result" class="sub" aria-live="polite"></p>`}
+function startRegistration(){$('#seg').style.display='none';$('#root .lc').classList.add('signup-card');$('#lt').textContent='Criar conta da empresa';$('#lsub').textContent='O primeiro acesso configura a empresa e entra automaticamente.';$('#lf').innerHTML=registrationFields(true)}
+async function registerAccount(initial){const email=$('#rg').value.trim().toLowerCase(),password=$('#rp').value,confirmation=$('#rc').value,company_name=$('#rco').value.trim(),cnpj=$('#rcnpj').value.trim();if(password!==confirmation)throw new Error('As senhas não coincidem.');if(password.length<8)throw new Error('A senha precisa ter pelo menos 8 caracteres.');if(!company_name)return toast('Informe a razão social.','no');const result=await api('/auth/register','POST',{email,password,company_name,cnpj});if(result.token){TOKEN=result.token;try{sessionStorage.setItem('tk',TOKEN)}catch(e){}S.tab='painel';await tela();return}$('#rp').value='';$('#rc').value='';$('#register-result').textContent=`Acesso criado para ${email}. A empresa e os dados do sistema continuam compartilhados nesta instalação.`;toast('Acesso criado.','ok')}
+async function entrar(){const j=await api('/auth/login','POST',{email:$('#lu').value,password:$('#ls').value});TOKEN=j.token;try{sessionStorage.setItem('tk',TOKEN)}catch(e){}S.tab='painel';tela()}
 function lmsg(t,ok){const m=$('#lm');if(m)m.innerHTML=`<div class="msg in ${ok?'ok':'no'}">${esc(t)}</div>`}
 function startWatch(){if(W!=null)return;
  W=navigator.geolocation.watchPosition(p=>{const s={lat:p.coords.latitude,lng:p.coords.longitude,accuracy_m:p.coords.accuracy,ts_ms:p.timestamp};BUF.push(s);BUF=BUF.slice(-8);liveCheck(s)},
@@ -278,7 +284,7 @@ function comprovante(j){const c=j.comprovante,cpf=c.trabalhador.cpf,e=j.kind=='e
  <div class="card ticket" style="margin-top:12px"><h3>${esc(c.titulo)}</h3><div class="ln" style="--i:0">${esc(c.empresa.nome||'Empresa não informada')}${c.empresa.cnpj?' · CNPJ '+esc(c.empresa.cnpj):''}</div><div class="ln" style="--i:1">${esc(c.trabalhador.nome)}${cpf?' · CPF ***'+esc(cpf.slice(3,9))+'**':''}</div><div class="ln" style="--i:2">NSR ${c.nsr} · ${new Date(c.data_hora).toLocaleString('pt-BR')}</div><div class="ln" style="--i:3"><small style="word-break:break-all;color:var(--mute)">SHA-256 ${esc(c.hash_sha256)}</small></div><div class="row noprint"><button class="btn" onclick="window.print()">Imprimir comprovante</button><button class="chip" onclick="login()">Novo registro</button></div></div>`}
 
 /* ---------- App do gestor: navegação com transições ---------- */
-const tabs=[['painel','Painel'],['quadros','Quadros'],['custeio','Custeio'],['materia','Matéria'],['paineis','Painéis'],['folha','Folha'],['financeiro','Financeiro'],['departamentos','Depts'],['espacos','Espaços'],['ponto','Ponto'],['integracao','Integração']],TAB={};
+const tabs=[['painel','Painel'],['quadros','Quadros'],['custeio','Custeio'],['materia','Matéria'],['paineis','Painéis'],['folha','Folha'],['financeiro','Financeiro'],['departamentos','Depts'],['espacos','Espaços'],['ponto','Ponto'],['integracao','Integração'],['conta','Conta']],TAB={};
 const SKEL='<div class="sk" style="height:44px;width:min(300px,60%);margin:22px 0 14px"></div><div class="grid g2"><div class="sk"></div><div class="sk"></div></div><div class="sk" style="margin-top:12px;height:170px"></div>';
 async function app(){
  if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>Flux</span><div class="tabs" id="tabs"><i class="pill"></i>${tabs.map(t=>`<button data-t="${t[0]}" class="${S.tab==t[0]?'on':''}" onclick="go('${t[0]}')">${t[1]}</button>`).join('')}</div><span class="sp"></span>
@@ -512,5 +518,9 @@ ${I.map(i=>`<tr data-k="i${i.id}"><td>${esc(i.name)}</td><td><span class="tag">$
 async function addI(){const n=$('#in').value.trim();if(!n)return toast('Digite o nome.','no');await api('/integrations','POST',{name:n,kind:$('#ik').value,endpoint:$('#ie').value.trim(),active:true});await refresh()}
 async function tgI(id,on,name,kind,endpoint){await api('/integrations/'+id,'PATCH',{name,kind,endpoint,active:!!on});await refresh()}
 async function delI(id){await api('/integrations/'+id,'DELETE');await gone($(`[data-k="i${id}"]`));await refresh()}
+
+TAB.conta=conta;
+async function conta(){const company=await api('/settings/company');
+ return `<h1>Conta da empresa</h1><p class="sub">Os acessos desta instalação compartilham os dados da mesma empresa.</p><div class="grid g2"><div class="card"><h3>Empresa</h3><p><b>${esc(company.name||'Empresa não cadastrada')}</b></p><p class="sub">${company.cnpj?'CNPJ '+esc(company.cnpj):'CNPJ não informado'}</p></div><div class="card"><h3>Criar acesso administrativo</h3><p class="sub">O novo usuário poderá acessar funcionários, folha, financeiro, ponto e os demais dados da empresa.</p>${registrationFields(false,company)}</div></div>`}
 tela();
 </script></body></html>
