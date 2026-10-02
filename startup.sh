@@ -1,5 +1,5 @@
 #!/bin/sh
-# Restart contract: start Flux Gestão (FastAPI) on 0.0.0.0:8080 if it is down.
+# Restart contract: start SIGI Gestão (FastAPI) on 0.0.0.0:8080 if it is down.
 set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$ROOT"
@@ -7,8 +7,8 @@ if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8080/docs; then
   exit 0
 fi
 mkdir -p "$ROOT/data" "$ROOT/app/static"
-if ! python3 -c "import fastapi,uvicorn" 2>/dev/null; then
-  pip3 install -q 'fastapi>=0.110' 'uvicorn[standard]>=0.29'
+if ! python3 -c "import fastapi,uvicorn,huggingface_hub" 2>/dev/null; then
+  pip3 install -q -r "$ROOT/requirements.txt"
 fi
 export TZ_OFFSET_HOURS="${TZ_OFFSET_HOURS:--3}"
 export DB_PATH="${DB_PATH:-$ROOT/data/flux.db}"

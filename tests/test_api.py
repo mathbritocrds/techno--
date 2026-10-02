@@ -69,7 +69,12 @@ def test_rotas_exigem_login():
     assert client.post("/auth/login", json={"user": "admin", "password": "errada"}).status_code == 401
 
 def test_front_end_e_servido():
-    assert "Flux" in client.get("/").text
+    page = client.get("/").text
+    assert "SIGI" in page and 'class="boot-screen"' in page
+    assert "accountShortcut" in page and 'data-t="conta"' not in page
+    assert page.count('onclick="run(resumirSetores,this)"') == 1
+    assert "onclick=\"run(resumirSetores,this)\"" in page
+    assert "api('/ai/fill-mask','POST'" in page and "TAB.ia=ia" not in page
 
 def test_ponto_tempo_real_e_comprovante(auth, ana):
     live = client.post("/clock/live", json={"employee_id": ana, "pin": "1234", "lat": -23.5501, "lng": -46.6301, "accuracy_m": 10}).json()
@@ -121,6 +126,36 @@ def test_exportacao_funcionarios_csv(auth, ana):
     assert "Ana" in response.text
     assert "pin_hash" not in response.text and "pin_salt" not in response.text
     assert client.get("/employees/export.csv").status_code == 401
+
+def test_contas_de_funcionario_e_mensagens_isoladas(auth, ana):
+    bob = client.post("/employees", json={"name": "Beto", "salary": 3000, "pin": "4321"}, headers=auth).json()["id"]
+    assert client.post(f"/employees/{ana}/account", json={"email": "ana@flux.test", "password": "senha-segura-ana"}, headers=auth).status_code == 201
+    assert client.post(f"/employees/{bob}/account", json={"email": "beto@flux.test", "password": "senha-segura-beto"}, headers=auth).status_code == 201
+    assert next(e for e in client.get("/employees", headers=auth).json() if e["id"] == ana)["account_email"] == "ana@flux.test"
+    assert client.get("/employees").status_code == 401
+    assert client.post("/auth/employee/login", json={"email": "ana@flux.test", "password": "errada"}).status_code == 401
+    ana_login = client.post("/auth/employee/login", json={"email": "ana@flux.test", "password": "senha-segura-ana"})
+    bob_login = client.post("/auth/employee/login", json={"email": "beto@flux.test", "password": "senha-segura-beto"})
+    assert ana_login.status_code == bob_login.status_code == 200
+    ana_auth = {"Authorization": "Bearer " + ana_login.json()["token"]}
+    bob_auth = {"Authorization": "Bearer " + bob_login.json()["token"]}
+
+    assert client.get("/dashboard", headers=ana_auth).status_code == 401
+    assert client.post("/auth/register", json={"email": "intruso@flux.test", "password": "senha-segura",
+                                                "company_name": "Flux Ltda"}, headers=ana_auth).status_code == 401
+    assert client.post("/messages", json={"scope": "team", "body": "Aviso para toda a equipe"}, headers=auth).status_code == 201
+    assert client.post("/messages", json={"scope": "private", "employee_id": ana, "body": "Oi, Ana"}, headers=auth).status_code == 201
+
+    ana_messages = client.get("/messages", headers=ana_auth).json()
+    assert [m["body"] for m in ana_messages] == ["Aviso para toda a equipe", "Oi, Ana"]
+    assert client.post("/messages", json={"scope": "private", "body": "Preciso conversar"}, headers=ana_auth).status_code == 201
+    assert any(m["body"] == "Preciso conversar" for m in client.get(f"/messages?employee_id={ana}", headers=auth).json())
+
+    bob_messages = client.get(f"/messages?employee_id={ana}", headers=bob_auth).json()
+    assert [m["body"] for m in bob_messages] == ["Aviso para toda a equipe"]
+    assert client.post("/messages", json={"scope": "private", "employee_id": ana, "body": "Conversa do Beto"}, headers=bob_auth).status_code == 201
+    assert all(m.get("employee_id") != ana or m["scope"] != "private" for m in client.get(f"/messages?employee_id={ana}", headers=bob_auth).json())
+    assert client.post("/messages", json={"scope": "private", "body": "sem destinatário"}, headers=auth).status_code == 400
 
 def test_exportacao_financeira_csv(auth):
     transaction_id = client.post("/finance", json={"kind": "receber", "description": "=SUM(1,1)",
@@ -207,6 +242,29 @@ def test_custos_por_setor_e_resumo_ia_sem_chave(auth, monkeypatch):
                                          "due": "2026-10-12", "department_id": department_id}, headers=auth).status_code == 400
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1,
                                          "due": "2026-10-12", "department_id": 9999}, headers=auth).status_code == 404
+
+def test_huggingface_fill_mask_autenticado_e_limitado(auth, monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    assert client.post("/ai/fill-mask", json={"text": "A resposta é <mask>."}).status_code == 401
+    assert client.post("/ai/fill-mask", json={"text": "A resposta é <mask>."}, headers=auth).status_code == 503
+    monkeypatch.setenv("HF_TOKEN", "token-de-teste")
+    assert client.post("/ai/fill-mask", json={"text": "Uma frase sem marcador."}, headers=auth).status_code == 400
+    assert client.post("/ai/fill-mask", json={"text": "Dois <mask> marcadores <mask>."}, headers=auth).status_code == 400
+    captured = {}
+    class FakeInferenceClient:
+        def __init__(self, provider, api_key):
+            captured["provider"], captured["api_key"] = provider, api_key
+        def fill_mask(self, text, model, top_k=None, targets=None):
+            captured.update(text=text, model=model, top_k=top_k, targets=targets)
+            return [{"token_str": "vida", "score": 0.91, "sequence": "A resposta é vida."}]
+    monkeypatch.setattr(main, "InferenceClient", FakeInferenceClient)
+    response = client.post("/ai/fill-mask", json={"text": "A resposta é <mask>."}, headers=auth)
+    assert response.status_code == 200
+    assert response.json()["suggestions"] == [{"token": "vida", "score": 0.91, "sequence": "A resposta é vida."}]
+    assert captured == {"provider": "hf-inference", "api_key": "token-de-teste",
+                        "text": "A resposta é <mask>.", "model": "FacebookAI/xlm-roberta-base", "top_k": 5, "targets": None}
+    targeted = client.post("/ai/fill-mask", json={"text": "Setor de maior custo: <mask>.", "targets": ["Operações", "operações", "Vendas"]}, headers=auth)
+    assert targeted.status_code == 200 and captured["targets"] == ["Operações", "Vendas"]
 
 def test_logout_invalida_sessao(auth):
     tk = client.post("/auth/login", json={"email": "admin@flux.test", "password": "segredo-de-teste"}).json()["token"]

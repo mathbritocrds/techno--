@@ -1,4 +1,4 @@
-"""Flux Gestão - API (FastAPI + SQLite).
+"""SIGI Gestão - API (FastAPI + SQLite).
 Rodar (na raiz do repositório):  uvicorn app.main:app --reload
 Docs:   http://localhost:8000/docs
 """
@@ -7,11 +7,12 @@ import urllib.error, urllib.request
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from huggingface_hub import InferenceClient
 from pydantic import BaseModel, Field
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +30,8 @@ OVERTIME_RATE = 1.5       # hora extra a 50% (estimativa)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS admins(user TEXT PRIMARY KEY, salt TEXT, hash TEXT);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user TEXT, expires REAL);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user TEXT, expires REAL,
+    role TEXT NOT NULL DEFAULT 'admin', subject_id INTEGER);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS employees(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, cpf TEXT DEFAULT '', role TEXT DEFAULT '',
@@ -67,8 +69,19 @@ CREATE TABLE IF NOT EXISTS cost_analyses(
 CREATE TABLE IF NOT EXISTS integrations(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
   endpoint TEXT DEFAULT '', active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS messages(
+    id INTEGER PRIMARY KEY, scope TEXT NOT NULL CHECK(scope IN ('team','private')),
+    employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+    sender_role TEXT NOT NULL CHECK(sender_role IN ('admin','employee')),
+    sender_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    sender_name TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
+                            "ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'",
+                            "ALTER TABLE sessions ADD COLUMN subject_id INTEGER",
+                            "ALTER TABLE employees ADD COLUMN account_email TEXT DEFAULT ''",
+                            "ALTER TABLE employees ADD COLUMN account_salt TEXT",
+                            "ALTER TABLE employees ADD COLUMN account_hash TEXT",
               "ALTER TABLE transactions ADD COLUMN department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
               "ALTER TABLE time_entries ADD COLUMN cpf TEXT DEFAULT ''",
               "ALTER TABLE time_entries ADD COLUMN nsr INTEGER",
@@ -99,8 +112,9 @@ with db() as c:
         try: c.execute(m)
         except sqlite3.OperationalError: pass
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_nsr ON time_entries(nsr) WHERE nsr IS NOT NULL")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_employee_account_email ON employees(account_email COLLATE NOCASE) WHERE account_email IS NOT NULL AND account_email != ''")
 
-app = FastAPI(title="Flux Gestão API")
+app = FastAPI(title="SIGI Gestão API")
 
 # ---------- Utilidades ----------
 def rows(cur): return [dict(r) for r in cur.fetchall()]
@@ -134,8 +148,9 @@ def admin(authorization: str = Header(default=""), x_admin_token: str = Header(d
     if authorization.startswith("Bearer "):
         h = hashlib.sha256(authorization[7:].encode()).hexdigest()
         with db() as c:
-            r = c.execute("SELECT expires FROM sessions WHERE token=?", (h,)).fetchone()
-        if r and r["expires"] > time.time():
+            r = c.execute("SELECT user,expires,role FROM sessions WHERE token=?", (h,)).fetchone()
+            account = c.execute("SELECT 1 FROM admins WHERE user=?", (r["user"],)).fetchone() if r else None
+        if r and r["expires"] > time.time() and r["role"] == "admin" and account:
             return
     if x_admin_token and hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
         return
@@ -159,8 +174,28 @@ def session_user(c, authorization, now):
     if not authorization.startswith("Bearer "):
         return None
     token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
-    session = c.execute("SELECT user,expires FROM sessions WHERE token=?", (token_hash,)).fetchone()
-    return session["user"] if session and session["expires"] > now else None
+    session = c.execute("SELECT user,expires,role FROM sessions WHERE token=?", (token_hash,)).fetchone()
+    if not session or session["expires"] <= now or session["role"] != "admin":
+        return None
+    return session["user"] if c.execute("SELECT 1 FROM admins WHERE user=?", (session["user"],)).fetchone() else None
+
+def principal(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
+    token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
+    with db() as c:
+        session = c.execute("SELECT user,expires,role,subject_id FROM sessions WHERE token=?", (token_hash,)).fetchone()
+        if not session or session["expires"] <= time.time():
+            raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
+        if session["role"] == "admin":
+            if not c.execute("SELECT 1 FROM admins WHERE user=?", (session["user"],)).fetchone():
+                raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
+            return {"role": "admin", "user": session["user"], "employee_id": None}
+        employee = c.execute("SELECT id,name FROM employees WHERE id=? AND account_email=? COLLATE NOCASE AND active=1",
+                             (session["subject_id"], session["user"])).fetchone()
+        if not employee:
+            raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
+        return {"role": "employee", "user": session["user"], "employee_id": employee["id"], "name": employee["name"]}
 
 @app.get("/auth/status")
 def auth_status():
@@ -194,7 +229,7 @@ def register_account(b: Registration, authorization: str = Header(default="")):
         token = None
         if not account_exists:
             token = secrets.token_urlsafe(32)
-            c.execute("INSERT INTO sessions VALUES(?,?,?)",
+            c.execute("INSERT INTO sessions(token,user,expires,role) VALUES(?,?,?,'admin')",
                       (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600))
     return {"email": email, "token": token}
 
@@ -212,9 +247,28 @@ def login(b: Login):
         _fails.pop(k, None)
         tok = secrets.token_urlsafe(32)
         c.execute("DELETE FROM sessions WHERE expires<?", (now,))
-        c.execute("INSERT INTO sessions VALUES(?,?,?)",
+        c.execute("INSERT INTO sessions(token,user,expires,role) VALUES(?,?,?,'admin')",
                   (hashlib.sha256(tok.encode()).hexdigest(), k, now + SESSION_HOURS * 3600))
     return {"token": tok, "user": k}
+
+@app.post("/auth/employee/login")
+def employee_login(b: Login):
+    email, now = (b.email or b.user).strip().lower(), time.time()
+    n, t = _fails.get(email, (0, 0))
+    if n >= 5 and now - t < 300:
+        raise HTTPException(429, "Muitas tentativas. Aguarde 5 minutos.")
+    with db() as c:
+        e = c.execute("SELECT id,name,account_salt,account_hash FROM employees WHERE account_email=? COLLATE NOCASE AND active=1",
+                       (email,)).fetchone()
+        if not e or not e["account_hash"] or not hmac.compare_digest(hash_pin(b.password, e["account_salt"]), e["account_hash"]):
+            _fails[email] = ((n if now - t < 300 else 0) + 1, now)
+            raise HTTPException(401, "E-mail ou senha incorretos.")
+        _fails.pop(email, None)
+        token = secrets.token_urlsafe(32)
+        c.execute("DELETE FROM sessions WHERE expires<?", (now,))
+        c.execute("INSERT INTO sessions(token,user,expires,role,subject_id) VALUES(?,?,?,'employee',?)",
+                  (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600, e["id"]))
+    return {"token": token, "user": email, "role": "employee", "employee_id": e["id"], "name": e["name"]}
 
 @app.post("/auth/logout")
 def logout(authorization: str = Header(default="")):
@@ -281,7 +335,7 @@ def add_employee(e: EmployeeIn):
 @app.get("/employees", dependencies=[Depends(admin)])
 def list_employees():
     with db() as c:
-        return rows(c.execute("""SELECT e.id,e.name,e.cpf,e.role,e.salary,e.benefits,e.active,e.department_id,
+        return rows(c.execute("""SELECT e.id,e.name,e.cpf,e.role,e.salary,e.benefits,e.active,e.department_id,e.account_email,
             d.name AS department FROM employees e LEFT JOIN departments d ON d.id=e.department_id"""))
 
 @app.get("/employees/export.csv", dependencies=[Depends(admin)])
@@ -308,6 +362,72 @@ def edit_employee(eid: int, p: EmployeePatch):
         cur = c.execute(f"UPDATE employees SET {','.join(k+'=?' for k in data)} WHERE id=?", (*data.values(), eid))
         if not cur.rowcount: raise HTTPException(404, "Funcionário não encontrado.")
     return {"ok": True}
+
+class EmployeeAccount(BaseModel):
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=8, max_length=128)
+
+@app.post("/employees/{eid}/account", dependencies=[Depends(admin)], status_code=201)
+def create_employee_account(eid: int, b: EmployeeAccount):
+    email = b.email.strip().lower()
+    salt = secrets.token_hex(16)
+    with db() as c:
+        employee = c.execute("SELECT id FROM employees WHERE id=? AND active=1", (eid,)).fetchone()
+        if not employee:
+            raise HTTPException(404, "Funcionário não encontrado ou inativo.")
+        if c.execute("SELECT 1 FROM admins WHERE user=? COLLATE NOCASE", (email,)).fetchone():
+            raise HTTPException(409, "Este e-mail já pertence a uma conta administrativa.")
+        try:
+            c.execute("UPDATE employees SET account_email=?,account_salt=?,account_hash=? WHERE id=?",
+                      (email, salt, hash_pin(b.password, salt), eid))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "Este e-mail já possui uma conta de funcionário.")
+    return {"email": email}
+
+class MessageIn(BaseModel):
+    scope: Literal["team", "private"]
+    body: str = Field(min_length=1, max_length=2000)
+    employee_id: Optional[int] = None
+
+@app.get("/messages")
+def list_messages(employee_id: Optional[int] = None, who: dict = Depends(principal)):
+    with db() as c:
+        if who["role"] == "employee":
+            employee_id = who["employee_id"]
+        elif employee_id is not None and not c.execute("SELECT 1 FROM employees WHERE id=?", (employee_id,)).fetchone():
+            raise HTTPException(404, "Funcionário não encontrado.")
+        if employee_id is None:
+            query = "SELECT * FROM messages WHERE scope='team' ORDER BY id"
+            params = ()
+        else:
+            query = "SELECT * FROM messages WHERE scope='team' OR (scope='private' AND employee_id=?) ORDER BY id"
+            params = (employee_id,)
+        return rows(c.execute(query, params))
+
+@app.post("/messages", status_code=201)
+def send_message(b: MessageIn, who: dict = Depends(principal)):
+    body = b.body.strip()
+    if not body:
+        raise HTTPException(400, "A mensagem não pode ficar vazia.")
+    employee_id = b.employee_id
+    if who["role"] == "employee":
+        employee_id = who["employee_id"] if b.scope == "private" else None
+    elif b.scope == "private":
+        if employee_id is None:
+            raise HTTPException(400, "Escolha o funcionário desta conversa privada.")
+        with db() as c:
+            if not c.execute("SELECT 1 FROM employees WHERE id=?", (employee_id,)).fetchone():
+                raise HTTPException(404, "Funcionário não encontrado.")
+    else:
+        employee_id = None
+    sender_employee_id = who["employee_id"] if who["role"] == "employee" else None
+    sender_name = who.get("name") or who["user"]
+    with db() as c:
+        cur = c.execute("INSERT INTO messages(scope,employee_id,sender_role,sender_employee_id,sender_name,body,created_at) "
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (b.scope, employee_id, who["role"], sender_employee_id, sender_name, body, iso(utcnow())))
+        message = c.execute("SELECT * FROM messages WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(message)
 
 # ---------- Ponto: espelho de horas ----------
 def timesheet_data(c, ym):
@@ -614,6 +734,39 @@ def summarize_department_costs(request_data: FinanceAnalysisIn):
     if not text:
         raise HTTPException(502, "O serviço de IA não retornou um resumo.")
     return {"month": costs["month"], "summary": text}
+
+class FillMaskIn(BaseModel):
+    text: str = Field(min_length=5, max_length=500)
+    targets: Optional[list[str]] = Field(default=None, max_length=5)
+
+@app.post("/ai/fill-mask", dependencies=[Depends(admin)])
+def suggest_mask_tokens(request_data: FillMaskIn):
+    token = os.getenv("HF_TOKEN")
+    if not token:
+        raise HTTPException(503, "Configure HF_TOKEN no servidor para ativar as sugestões de texto.")
+    text = request_data.text.strip()
+    if text.count("<mask>") != 1:
+        raise HTTPException(400, "Inclua exatamente um marcador <mask> na frase.")
+    targets = []
+    for value in request_data.targets or []:
+        target = value.strip()
+        if not target or len(target) > 80:
+            raise HTTPException(400, "Cada alternativa deve ter entre 1 e 80 caracteres.")
+        if target.casefold() not in {item.casefold() for item in targets}:
+            targets.append(target)
+    try:
+        client = InferenceClient(provider="hf-inference", api_key=token)
+        if targets:
+            output = client.fill_mask(text, model="FacebookAI/xlm-roberta-base", targets=targets)
+        else:
+            output = client.fill_mask(text, model="FacebookAI/xlm-roberta-base", top_k=5)
+    except Exception as exc:
+        raise HTTPException(502, "Não foi possível obter sugestões do Hugging Face.") from exc
+    suggestions = [{"token": item["token_str"], "score": round(float(item["score"]), 6),
+                    "sequence": item["sequence"]} for item in output[:5]]
+    if not suggestions:
+        raise HTTPException(502, "O modelo não retornou sugestões.")
+    return {"model": "FacebookAI/xlm-roberta-base", "suggestions": suggestions}
 
 # ---------- Matéria-prima ----------
 class MaterialIn(BaseModel):
