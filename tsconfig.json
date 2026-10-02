@@ -21,7 +21,7 @@
       "vite/client",
       "node"
     ],
-    "baseUrl": ".",
+    // Alias paths resolve from this config; baseUrl is deprecated in TypeScript 6.
     "paths": {
       "@/*": [
         "./src/*"

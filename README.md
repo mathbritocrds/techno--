@@ -25,9 +25,16 @@ Login padrão de testes: `admin` / `admin123`.
 - **Integrações** (webhook, CSV, WhatsApp, ERP).
 - **Resumo financeiro com Gemini** usando `gemini-2.5-flash` por padrão. `GEMINI_MODEL` permite escolher outro modelo; a chave é lida apenas pelo servidor.
 - **Exportação financeira em CSV** para contas a pagar e receber, com neutralização de fórmulas em campos de texto.
+- **Funcionários**: cadastro na tela de Folha e exportação autenticada da lista em CSV.
 - **Tema claro e escuro** com transição suave, preferência persistida no navegador e suporte ao tema do sistema.
 
-O banco SQLite e caches Python são locais e ignorados pelo Git. Configure `GEMINI_API_KEY` como variável de ambiente no servidor; não inclua chaves no front-end nem em arquivos versionados.
+## Persistência
+
+O SQLite registra os dados operacionais do sistema (equipe, tarefas, ponto, financeiro, estoque, departamentos, espaços e configurações) em `data/flux.db`. Esse caminho é resolvido a partir do projeto, independentemente do diretório de onde o servidor foi iniciado. É possível definir `DB_PATH` para apontar a outro arquivo ou volume persistente. Bancos e caches locais são ignorados pelo Git.
+
+SQLite foi mantido em vez de NoSQL porque este sistema tem relações entre funcionários, departamentos, folha, pagamentos e ponto, além de depender de transações consistentes. Para implantação em infraestrutura efêmera, configure um volume persistente ou migre para um banco gerenciado antes de usar dados reais.
+
+Configure `GEMINI_API_KEY` como variável de ambiente no servidor; não inclua chaves no front-end nem em arquivos versionados.
 
 ## Testes
 

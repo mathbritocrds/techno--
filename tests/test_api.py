@@ -80,6 +80,15 @@ def test_exportacao_csv(auth, ana):
     r = client.get("/time-entries/export.csv", headers=auth)
     assert r.status_code == 200 and r.text.startswith("NSR;CPF;Nome")
 
+def test_exportacao_funcionarios_csv(auth, ana):
+    response = client.get("/employees/export.csv", headers=auth)
+    assert response.status_code == 200
+    assert 'filename="funcionarios.csv"' in response.headers["content-disposition"]
+    assert response.text.lstrip("\ufeff").startswith("ID;Nome;CPF;Cargo;Salário")
+    assert "Ana" in response.text
+    assert "pin_hash" not in response.text and "pin_salt" not in response.text
+    assert client.get("/employees/export.csv").status_code == 401
+
 def test_exportacao_financeira_csv(auth):
     transaction_id = client.post("/finance", json={"kind": "receber", "description": "=SUM(1,1)",
                                                    "amount": 123.45, "due": "2026-09-10"},

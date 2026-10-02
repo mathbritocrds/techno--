@@ -14,7 +14,8 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-DB = os.getenv("DB_PATH", "data/flux.db")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DB = os.path.abspath(os.getenv("DB_PATH") or os.path.join(APP_DIR, "..", "data", "flux.db"))
 os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")                    # opcional: acesso direto via API (vazio = desligado)
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
@@ -240,6 +241,22 @@ def list_employees():
     with db() as c:
         return rows(c.execute("""SELECT e.id,e.name,e.cpf,e.role,e.salary,e.benefits,e.active,e.department_id,
             d.name AS department FROM employees e LEFT JOIN departments d ON d.id=e.department_id"""))
+
+@app.get("/employees/export.csv", dependencies=[Depends(admin)])
+def export_employees():
+    with db() as c:
+        employees = c.execute("""SELECT e.id,e.name,e.cpf,e.role,e.salary,e.benefits,
+            COALESCE(d.name,'') AS department,CASE WHEN e.active=1 THEN 'Ativo' ELSE 'Inativo' END AS status
+            FROM employees e LEFT JOIN departments d ON d.id=e.department_id
+            ORDER BY e.name COLLATE NOCASE,e.id""").fetchall()
+    out = io.StringIO()
+    out.write("\ufeff")
+    writer = csv.writer(out, delimiter=";")
+    writer.writerow(["ID", "Nome", "CPF", "Cargo", "Salário", "Benefícios", "Departamento", "Status"])
+    for employee in employees:
+        writer.writerow([csv_safe(value) for value in employee])
+    return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="funcionarios.csv"'})
 
 @app.patch("/employees/{eid}", dependencies=[Depends(admin)])
 def edit_employee(eid: int, p: EmployeePatch):
