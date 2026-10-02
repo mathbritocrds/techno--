@@ -8,6 +8,8 @@ Sistema de gestão com visual Flux: quadros (kanban e tabela), custeio, matéria
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export ADMIN_USER=admin ADMIN_PASSWORD='uma-senha-forte'
+# Opcional: habilita o resumo financeiro com Gemini
+export GEMINI_API_KEY='sua-chave-do-gemini'
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
@@ -21,8 +23,11 @@ Login padrão de testes: `admin` / `admin123`.
 - **Painéis de custo** que consolidam o DRE.
 - **Departamentos** e **espaços** (vínculo de e-mail de administrador).
 - **Integrações** (webhook, CSV, WhatsApp, ERP).
+- **Resumo financeiro com Gemini** usando `gemini-2.5-flash` por padrão. `GEMINI_MODEL` permite escolher outro modelo; a chave é lida apenas pelo servidor.
+- **Exportação financeira em CSV** para contas a pagar e receber, com neutralização de fórmulas em campos de texto.
+- **Tema claro e escuro** com transição suave, preferência persistida no navegador e suporte ao tema do sistema.
 
-Design, animações e estrutura do front (orbs, pílulas, transições, ponto ao vivo) permanecem os mesmos.
+O banco SQLite e caches Python são locais e ignorados pelo Git. Configure `GEMINI_API_KEY` como variável de ambiente no servidor; não inclua chaves no front-end nem em arquivos versionados.
 
 ## Testes
 

@@ -3,3 +3,11 @@ node_modules/
 .github_repo
 .env
 .env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+attachments/

@@ -2,11 +2,20 @@
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Flux Gestão</title>
-<script>document.documentElement.dataset.theme='light';try{localStorage.setItem('theme','light')}catch(e){}</script>
+<script>const systemTheme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';try{document.documentElement.dataset.theme=localStorage.getItem('theme')||systemTheme}catch(e){document.documentElement.dataset.theme=systemTheme}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Fraunces:wght@500;600&display=swap">
 <style>
 :root{--bg:#F3F8F5;--ink:#35453E;--mute:#74827B;--card:rgba(255,255,255,.94);--line:rgba(80,126,103,.13);--y:#5E9D7C;--o:#D6A458;--g:#5B9B77;--r:#CF7771;--b:#7799B8;--btn-ink:#FFFFFF;--inp:#FFFFFF;--hair:rgba(80,126,103,.18);--shine:#F9FCFA;--ease:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.56,.64,1);color-scheme:light}
+:root[data-theme=dark]{--bg:#171D19;--ink:#E5ECE6;--mute:#A6B2A9;--card:rgba(35,43,38,.96);--line:rgba(173,194,179,.17);--y:#78B694;--o:#E2B96F;--g:#79C596;--r:#E98D86;--b:#8CB2D1;--btn-ink:#102019;--inp:#242D27;--hair:rgba(173,194,179,.22);--shine:#303A33;color-scheme:dark}
 *{box-sizing:border-box}
+:root[data-theme=dark] body{background:linear-gradient(135deg,#171D19 0%,#202521 52%,#24211F 100%)}
+:root[data-theme=dark] .pill{background:rgba(120,182,148,.24);box-shadow:0 3px 10px rgba(0,0,0,.28)}
+:root[data-theme=dark] .tabs button.on,:root[data-theme=dark] .seg button.on{color:var(--ink)}
+:root[data-theme=dark] .tag{background:rgba(121,197,150,.18);color:#A6DDB7}
+:root[data-theme=dark] .tag.w{background:rgba(226,185,111,.2);color:#E9CC8C}
+:root[data-theme=dark] .tag.x{background:rgba(233,141,134,.18);color:#F0AAA4}
+:root[data-theme=dark] .tag[style*="145,175,199"]{background:rgba(140,178,209,.2)!important;color:#BED3E5!important}
+:root[data-theme=dark] .orbs i{opacity:.55}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 html.tt *,html.tt *::before,html.tt *::after{transition-property:background-color,color,border-color,fill,stroke,box-shadow!important;transition-duration:.5s!important}
 body{margin:0;background:linear-gradient(135deg,#F3F8F5 0%,#F7F8FC 52%,#FFF7F2 100%);color:var(--ink);font:14px Outfit,system-ui,sans-serif;min-height:100vh;overflow-x:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-font-smoothing:antialiased}
@@ -113,7 +122,7 @@ label{display:block;color:var(--mute);font-size:12px;margin:10px 0 4px}
 .none{border:1.5px dashed var(--hair);border-radius:12px;padding:16px;text-align:center;color:var(--mute);margin-top:8px}
 
 /* ---------- Mensagens, ponto ao vivo e comprovante ---------- */
-.login{min-height:90vh;display:grid;place-items:center}.lc{width:100%;max-width:380px}
+.login{min-height:90vh;display:grid;place-items:center}.lc{width:100%;max-width:380px}.login-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.theme-toggle{width:40px;height:40px;padding:0;font-size:18px}
 .msg{padding:12px;border-radius:12px;margin-top:12px;font-weight:500;transition:background-color .4s,color .4s}
 .msg.in,.fi{animation:fi .55s var(--ease) backwards}
 @keyframes fi{from{opacity:0;transform:translateY(10px)}}
@@ -201,6 +210,9 @@ const run=async(f,btn)=>{if(btn){if(btn.classList.contains('busy'))return;btn.cl
  try{await f()}catch(e){toast(e.message,'no');if(btn&&btn.isConnected)shake(btn)}finally{if(btn&&btn.isConnected)btn.classList.remove('busy')}};
 function sair(local){if(!local)api('/auth/logout','POST').catch(()=>{});TOKEN=null;try{sessionStorage.removeItem('tk')}catch(e){}tela()}
 function pos(){return new Promise((ok,er)=>{if(!navigator.geolocation)return er(new Error('Seu navegador não tem localização.'));navigator.geolocation.getCurrentPosition(ok,()=>er(new Error('Ative o GPS e permita o acesso à localização.')),{enableHighAccuracy:true,timeout:15000})})}
+function themeButton(){const dark=document.documentElement.dataset.theme=='dark';return `<button class="chip ico theme-toggle" type="button" onclick="toggleTheme()" aria-label="Alternar tema claro ou escuro" aria-pressed="${dark}" title="Alternar tema">${dark?'☼':'☾'}</button>`}
+function syncThemeButtons(){document.querySelectorAll('.theme-toggle').forEach(button=>{const dark=document.documentElement.dataset.theme=='dark';button.textContent=dark?'☼':'☾';button.setAttribute('aria-pressed',String(dark))})}
+function toggleTheme(){const root=document.documentElement;root.classList.add('tt');const next=root.dataset.theme=='dark'?'light':'dark';root.dataset.theme=next;try{localStorage.setItem('theme',next)}catch(e){}syncThemeButtons();clearTimeout(toggleTheme.timer);toggleTheme.timer=setTimeout(()=>root.classList.remove('tt'),550)}
 
 /* ---------- Troca de tela raiz (login ⇄ painel) ---------- */
 let SWAP=0;
@@ -213,7 +225,7 @@ let W=null,BUF=[],LAST=0,FILL=0;
 function stopWatch(){if(W!=null&&navigator.geolocation)navigator.geolocation.clearWatch(W);W=null;BUF=[]}
 function tela(){stopWatch();return TOKEN?app():login()}
 async function login(){stopWatch();
- if(!await swapRoot(`<div class="login"><div class="card lc view"><div class="logo"><i class="mk"></i>Flux</div>
+ if(!await swapRoot(`<div class="login"><div class="card lc view"><div class="login-head"><div class="logo"><i class="mk"></i>Flux</div>${themeButton()}</div>
  <div id="lh"><h1 id="lt" class="lh1"></h1><p class="sub" id="lsub" style="margin-bottom:6px"></p></div>
  <div class="seg" id="seg"><i class="pill"></i><button data-m="g" class="${S.mode=='g'?'on':''}" onclick="setMode('g')">Gestor</button><button data-m="p" class="${S.mode=='p'?'on':''}" onclick="setMode('p')">Bater ponto</button></div>
  <div id="lf"></div><div id="live" class="msg" style="display:none"></div><div id="lm"></div></div></div>`))return;
@@ -265,7 +277,7 @@ const tabs=[['painel','Painel'],['quadros','Quadros'],['custeio','Custeio'],['ma
 const SKEL='<div class="sk" style="height:44px;width:min(300px,60%);margin:22px 0 14px"></div><div class="grid g2"><div class="sk"></div><div class="sk"></div></div><div class="sk" style="margin-top:12px;height:170px"></div>';
 async function app(){
  if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>Flux</span><div class="tabs" id="tabs"><i class="pill"></i>${tabs.map(t=>`<button data-t="${t[0]}" class="${S.tab==t[0]?'on':''}" onclick="go('${t[0]}')">${t[1]}</button>`).join('')}</div><span class="sp"></span>
- <button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
+ ${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
  placeAll(true);go(S.tab,{first:true})}
 function markTabs(anim){document.querySelectorAll('#tabs button').forEach(b=>{const on=b.dataset.t==S.tab;b.classList.toggle('on',on);on?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current')});
  placePill($('#tabs'),!anim);const n=$('nav'),a=$('#tabs .on');if(n&&a&&n.scrollWidth>n.clientWidth)n.scrollTo({left:a.offsetLeft-n.clientWidth/2+a.offsetWidth/2+$('#tabs').offsetLeft,behavior:still()?'auto':'smooth'})}
@@ -400,9 +412,10 @@ async function financeiro(){const month=S.financeMonth||new Date().toISOString()
 <div class="grid k4"><div class="card"><h3>A receber</h3><span class="big">${cnt(s.receber_aberto,'R')}</span><span class="d">${R(s.receber_vencido)} vencido</span></div><div class="card"><h3>A pagar</h3><span class="big">${cnt(s.pagar_aberto,'R')}</span><span class="d">${R(s.pagar_vencido)} vencido</span></div><div class="card"><h3>Folha mensal</h3><span class="big">${cnt(s.folha_mensal,'R')}</span></div></div>
 <div class="card" style="margin-top:12px"><div class="row" style="align-items:center;margin:0"><h3 style="margin:0;flex:1">Custeio mensal por setor</h3><input type="month" value="${month}" aria-label="Competência dos custos" onchange="S.financeMonth=this.value;refresh()"></div><div class="leg" style="margin-top:12px">${parts.map(p=>`<span><b style="background:var(--${p[1]=='paid'?'g':p[1]=='open'?'o':'b'})"></b>${p[0]}</span>`).join('')}</div>${chart}<div class="row"><span class="sub" style="margin:0;flex:1">Total no mês: <b>${R(costs.totals.total)}</b> · despesas pagas ${R(costs.totals.paid)} · em aberto ${R(costs.totals.open)} · folha ${R(costs.totals.payroll)}</span><button class="btn" onclick="run(resumirSetores,this)">Resumir com IA</button></div><div id="finance-ai" aria-live="polite"></div></div>
 <div class="card tw" style="margin-top:12px"><h3>Fluxo de caixa previsto</h3><table><tr><th>Mês</th><th>A receber</th><th>A pagar</th><th>Folha</th><th>Saldo</th></tr>${s.fluxo.map(f=>`<tr><td>${f.month.split('-').reverse().join('/')}</td><td>${R(f.receber)}</td><td>${R(f.pagar)}</td><td>${R(f.folha)}</td><td><span class="tag ${f.saldo<0?'x':''}">${R(f.saldo)}</span></td></tr>`).join('')}</table></div>
-<div class="card tw" style="margin-top:12px"><h3>Lançamentos em aberto</h3>${T.length?`<table><tr><th>Tipo</th><th>Descrição</th><th>Setor</th><th>Vencimento</th><th>Valor</th><th></th></tr>${T.map(t=>`<tr data-k="x${t.id}"><td><span class="tag ${t.kind=='pagar'?'w':''}">${t.kind=='pagar'?'Pagar':'Receber'}</span></td><td>${esc(t.description)}</td><td>${esc(t.department||'—')}</td><td>${dbr(t.due)}${t.due<hoje?' <span class="tag x">vencido</span>':''}</td><td>${R(t.amount)}</td><td style="white-space:nowrap"><button class="chip" onclick="run(()=>payT(${t.id}),this)">${t.kind=='pagar'?'Marcar como pago':'Marcar como recebido'}</button> <button class="chip" onclick="run(()=>delTx(${t.id}),this)" title="Excluir lançamento" aria-label="Excluir lançamento">×</button></td></tr>`).join('')}</table>`:'<p class="sub">Nenhum lançamento em aberto. Adicione o primeiro abaixo.</p>'}</div>
+<div class="card tw" style="margin-top:12px"><div class="row" style="align-items:center;margin:0"><h3 style="margin:0;flex:1">Lançamentos em aberto</h3><button class="chip" onclick="run(exportFinanceCsv,this)">Exportar CSV</button></div>${T.length?`<table><tr><th>Tipo</th><th>Descrição</th><th>Setor</th><th>Vencimento</th><th>Valor</th><th></th></tr>${T.map(t=>`<tr data-k="x${t.id}"><td><span class="tag ${t.kind=='pagar'?'w':''}">${t.kind=='pagar'?'Pagar':'Receber'}</span></td><td>${esc(t.description)}</td><td>${esc(t.department||'—')}</td><td>${dbr(t.due)}${t.due<hoje?' <span class="tag x">vencido</span>':''}</td><td>${R(t.amount)}</td><td style="white-space:nowrap"><button class="chip" onclick="run(()=>payT(${t.id}),this)">${t.kind=='pagar'?'Marcar como pago':'Marcar como recebido'}</button> <button class="chip" onclick="run(()=>delTx(${t.id}),this)" title="Excluir lançamento" aria-label="Excluir lançamento">×</button></td></tr>`).join('')}</table>`:'<p class="sub">Nenhum lançamento em aberto. Adicione o primeiro abaixo.</p>'}</div>
 <div class="card" style="margin-top:12px"><h3>Novo lançamento</h3><div class="row"><select id="fk" aria-label="Tipo" onchange="$('#fdep').disabled=this.value!='pagar'"><option value="receber">A receber</option><option value="pagar">A pagar</option></select><input id="fd" placeholder="Descrição"><input id="fv" type="number" min="0" step="0.01" placeholder="Valor"><input id="ft" type="date" aria-label="Vencimento"><select id="fdep" aria-label="Setor da despesa" disabled><option value="">Sem setor</option>${D.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div><div class="row"><button class="btn" onclick="run(addTx,this)">Adicionar lançamento</button></div></div>`}
 async function resumirSetores(btn){const out=$('#finance-ai');out.innerHTML='<p class="sub" role="status">Analisando os custos desta competência…</p>';try{const result=await api('/finance/department-summary','POST',{month:S.financeMonth});out.innerHTML=`<p class="ai-summary">${esc(result.summary)}</p>`}catch(e){out.innerHTML=`<p class="msg no" role="alert">${esc(e.message)}</p>`;throw e}}
+async function exportFinanceCsv(){const response=await fetch('/finance/export.csv',{headers:{Authorization:'Bearer '+TOKEN}}),data=await response.blob();if(!response.ok)throw new Error('Não foi possível exportar o financeiro.');const link=document.createElement('a');link.href=URL.createObjectURL(data);link.download='financeiro.csv';link.click();URL.revokeObjectURL(link.href);toast('Relatório financeiro exportado.','ok')}
 async function payT(id){await api(`/finance/${id}/paid`,'PATCH');await gone($(`[data-k="x${id}"]`));await refresh()}
 async function delTx(id){await api('/finance/'+id,'DELETE');await gone($(`[data-k="x${id}"]`));await refresh()}
 async function addTx(){const d=$('#fd').value.trim(),v=+$('#fv').value,t=$('#ft').value,k=$('#fk').value;if(!d||!v||!t)return toast('Preencha descrição, valor e vencimento.','no');await api('/finance','POST',{kind:k,description:d,amount:v,due:t,department_id:k=='pagar'?(+$('#fdep').value||null):null});await refresh()}

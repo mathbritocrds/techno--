@@ -428,6 +428,25 @@ def list_tx(status: str = "open"):
     with db() as c:
         return rows(c.execute(f"SELECT t.*,d.name AS department FROM transactions t LEFT JOIN departments d ON d.id=t.department_id {q.replace('paid=', 't.paid=')} ORDER BY t.due,t.id"))
 
+@app.get("/finance/export.csv", dependencies=[Depends(admin)])
+def export_finance():
+    with db() as c:
+        transactions = c.execute("""SELECT t.kind,t.description,COALESCE(d.name,'') AS department,t.due,
+            t.amount,t.paid,t.paid_at FROM transactions t
+            LEFT JOIN departments d ON d.id=t.department_id ORDER BY t.due,t.id""").fetchall()
+    out = io.StringIO()
+    out.write("\ufeff")
+    writer = csv.writer(out, delimiter=";")
+    writer.writerow(["Tipo", "Descrição", "Departamento", "Vencimento", "Valor", "Status", "Pago em"])
+    for transaction in transactions:
+        kind = "A receber" if transaction["kind"] == "receber" else "A pagar"
+        status = "Pago" if transaction["paid"] else "Em aberto"
+        writer.writerow([csv_safe(value) for value in (
+            kind, transaction["description"], transaction["department"], transaction["due"],
+            transaction["amount"], status, transaction["paid_at"] or "")])
+    return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="financeiro.csv"'})
+
 @app.patch("/finance/{tid}/paid", dependencies=[Depends(admin)])
 def pay_tx(tid: int):
     with db() as c:
@@ -507,21 +526,22 @@ class FinanceAnalysisIn(BaseModel):
 
 @app.post("/finance/department-summary", dependencies=[Depends(admin)])
 def summarize_department_costs(request_data: FinanceAnalysisIn):
-    api_key = os.getenv("XAI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise HTTPException(503, "O resumo por IA não está ativado neste ambiente. Os custos continuam disponíveis no gráfico.")
+        raise HTTPException(503, "Configure GEMINI_API_KEY no servidor para ativar o resumo. Os custos continuam disponíveis no gráfico.")
     costs = department_costs(request_data.month)
     prompt = ("Analise os custos mensais por setor da empresa e responda em português brasileiro. "
               "Use somente os totais fornecidos, não invente causas nem recomendações sem evidência. "
               "Dê uma visão geral curta e depois uma linha por setor, destacando folha, despesas pagas e abertas. "
               "Sinalize concentrações relevantes e custos ainda sem setor. Dados: "
               + json.dumps(costs, ensure_ascii=False, separators=(",", ":")))
-    body = json.dumps({"model": "grok-4.7", "store": False, "max_output_tokens": 450,
-                       "input": [{"role": "system", "content": "Você é um analista financeiro cuidadoso. Diferencie fatos de recomendações e seja conciso."},
-                                 {"role": "user", "content": prompt}]}).encode()
-    req = urllib.request.Request("https://api.x.ai/v1/responses", data=body,
-                                 headers={"Authorization": f"Bearer {api_key}",
-                                          "Content-Type": "application/json"}, method="POST")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    body = json.dumps({"system_instruction": {"parts": [{"text": "Você é um analista financeiro cuidadoso. Diferencie fatos de recomendações e seja conciso."}]},
+                       "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                       "generationConfig": {"temperature": 0.3, "maxOutputTokens": 450}}).encode()
+    req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                 data=body, headers={"x-goog-api-key": api_key,
+                                                    "Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             result = json.loads(response.read())
@@ -529,9 +549,9 @@ def summarize_department_costs(request_data: FinanceAnalysisIn):
         raise HTTPException(502, f"O serviço de IA respondeu com erro ({exc.code}).") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise HTTPException(502, "Não foi possível conectar ao serviço de IA.") from exc
-    text = "\n".join(part["text"] for item in result.get("output", [])
-                     if item.get("type") == "message"
-                     for part in item.get("content", []) if part.get("type") == "output_text").strip()
+    text = "\n".join(part["text"] for candidate in result.get("candidates", [])
+                     for part in candidate.get("content", {}).get("parts", [])
+                     if isinstance(part.get("text"), str)).strip()
     if not text:
         raise HTTPException(502, "O serviço de IA não retornou um resumo.")
     return {"month": costs["month"], "summary": text}

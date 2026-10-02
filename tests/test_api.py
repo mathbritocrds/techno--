@@ -80,6 +80,20 @@ def test_exportacao_csv(auth, ana):
     r = client.get("/time-entries/export.csv", headers=auth)
     assert r.status_code == 200 and r.text.startswith("NSR;CPF;Nome")
 
+def test_exportacao_financeira_csv(auth):
+    transaction_id = client.post("/finance", json={"kind": "receber", "description": "=SUM(1,1)",
+                                                   "amount": 123.45, "due": "2026-09-10"},
+                                 headers=auth).json()["id"]
+    try:
+        response = client.get("/finance/export.csv", headers=auth)
+        assert response.status_code == 200
+        assert 'filename="financeiro.csv"' in response.headers["content-disposition"]
+        assert response.text.lstrip("\ufeff").startswith("Tipo;Descrição")
+        assert "A receber;'=SUM(1,1)" in response.text
+        assert client.get("/finance/export.csv").status_code == 401
+    finally:
+        client.delete(f"/finance/{transaction_id}", headers=auth)
+
 def test_horas_extras_entram_na_folha(auth, ana):
     con = sqlite3.connect(main.DB)   # 08:00 e 18:00 em Brasília = 11:00 e 21:00 UTC => 10 h, 2 h extras
     for kind, hora in (("entrada", "11:00:00"), ("saida", "21:00:00")):
@@ -124,25 +138,29 @@ def test_custos_por_setor_e_resumo_ia_sem_chave(auth, monkeypatch):
     assert operations["paid"] == 0 and operations["open"] == 1200
     assert operations["payroll"] == 3840 and operations["total"] == 5040
     assert unassigned["open"] == 300 and data["totals"]["total"] == sum(item["total"] for item in data["departments"])
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     unavailable = client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth)
-    assert unavailable.status_code == 503 and "não está ativado" in unavailable.json()["detail"]
-    monkeypatch.setenv("XAI_API_KEY", "chave-de-teste")
+    assert unavailable.status_code == 503 and "GEMINI_API_KEY" in unavailable.json()["detail"]
+    monkeypatch.setenv("GEMINI_API_KEY", "chave-de-teste")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
     captured = {}
     class FakeResponse:
         def __enter__(self): return self
         def __exit__(self, *args): return False
         def read(self):
-            return json.dumps({"output": [{"type": "message", "content": [
-                {"type": "output_text", "text": "Operações concentra os maiores custos."}]}]}).encode()
+            return json.dumps({"candidates": [{"content": {"parts": [
+                {"text": "Operações concentra os maiores custos."}]}}]}).encode()
     def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
         captured["payload"] = json.loads(request.data)
-        assert request.get_header("Authorization") == "Bearer chave-de-teste"
+        assert request.get_header("X-goog-api-key") == "chave-de-teste"
         assert timeout == 30
         return FakeResponse()
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
     summary = client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth)
     assert summary.status_code == 200 and summary.json()["summary"] == "Operações concentra os maiores custos."
-    assert captured["payload"]["store"] is False and captured["payload"]["max_output_tokens"] == 450
+    assert captured["url"].endswith("/models/gemini-2.5-flash:generateContent")
+    assert captured["payload"]["generationConfig"]["maxOutputTokens"] == 450
     assert client.post("/finance", json={"kind": "receber", "description": "Venda", "amount": 200,
                                          "due": "2026-10-12", "department_id": department_id}, headers=auth).status_code == 400
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1,
