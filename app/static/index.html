@@ -2,7 +2,7 @@
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Flux Gestão</title>
-<script>const systemTheme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';try{document.documentElement.dataset.theme=localStorage.getItem('theme')||systemTheme}catch(e){document.documentElement.dataset.theme=systemTheme}</script>
+<script>const systemTheme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';const root=document.documentElement;try{root.dataset.theme=localStorage.getItem('theme')||systemTheme;const motion=localStorage.getItem('motion');root.dataset.motion=motion==='full'||motion==='reduced'?motion:'system'}catch(e){root.dataset.theme=systemTheme;root.dataset.motion='system'}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Fraunces:wght@500;600&display=swap">
 <style>
 :root{--bg:#F3F8F5;--ink:#35453E;--mute:#74827B;--card:rgba(255,255,255,.94);--line:rgba(80,126,103,.13);--y:#5E9D7C;--o:#D6A458;--g:#5B9B77;--r:#CF7771;--b:#7799B8;--btn-ink:#FFFFFF;--inp:#FFFFFF;--hair:rgba(80,126,103,.18);--shine:#F9FCFA;--ease:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.56,.64,1);color-scheme:light}
@@ -17,7 +17,7 @@
 :root[data-theme=dark] .tag[style*="145,175,199"]{background:rgba(140,178,209,.2)!important;color:#BED3E5!important}
 :root[data-theme=dark] .orbs i{opacity:.55}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
-html.tt *,html.tt *::before,html.tt *::after{transition-property:background-color,color,border-color,fill,stroke,box-shadow!important;transition-duration:.5s!important}
+html.tt *,html.tt *::before,html.tt *::after{transition-property:background-color,background-image,color,border-color,fill,stroke,box-shadow!important;transition-duration:.5s!important}
 body{margin:0;background:linear-gradient(135deg,#F3F8F5 0%,#F7F8FC 52%,#FFF7F2 100%);color:var(--ink);font:14px Outfit,system-ui,sans-serif;min-height:100vh;overflow-x:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-font-smoothing:antialiased}
 button:focus-visible,input:focus-visible,select:focus-visible,.task:focus-visible{outline:2px solid var(--b);outline-offset:2px}
 
@@ -123,6 +123,7 @@ label{display:block;color:var(--mute);font-size:12px;margin:10px 0 4px}
 
 /* ---------- Mensagens, ponto ao vivo e comprovante ---------- */
 .login{min-height:90vh;display:grid;place-items:center}.lc{width:100%;max-width:380px}.login-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.theme-toggle{width:40px;height:40px;padding:0;font-size:18px}
+.login-tools{display:flex;align-items:center;gap:8px}.motion-control{display:flex;align-items:center;gap:7px;min-height:40px;padding:8px 10px;margin:0;border:1px solid var(--line);border-radius:99px;background:var(--card);color:var(--mute);font-size:12px;white-space:nowrap;cursor:pointer}.motion-control input{width:16px;min-width:16px;height:16px;margin:0;accent-color:var(--y)}
 .msg{padding:12px;border-radius:12px;margin-top:12px;font-weight:500;transition:background-color .4s,color .4s}
 .msg.in,.fi{animation:fi .55s var(--ease) backwards}
 @keyframes fi{from{opacity:0;transform:translateY(10px)}}
@@ -169,7 +170,8 @@ main.leave{animation:leave .21s ease-in forwards}
 .sk{height:110px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(100deg,var(--card) 30%,var(--shine) 50%,var(--card) 70%) 0 0/220% 100%;animation:shim 1.3s linear infinite}
 @keyframes shim{to{background-position:-220% 0}}
 
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}.orbs i{will-change:auto}}
+@media (prefers-reduced-motion:reduce){:root:not([data-motion=full]) *, :root:not([data-motion=full]) *::before, :root:not([data-motion=full]) *::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}:root:not([data-motion=full]) .orbs i{will-change:auto}}
+:root[data-motion=reduced] *, :root[data-motion=reduced] *::before, :root[data-motion=reduced] *::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 @media print{.orbs,nav,#toast,.noprint,.seg{display:none!important}body{background:#fff;color:#000}.card{background:#fff;box-shadow:none;border:1px solid #ccc;backdrop-filter:none}}
 </style></head><body>
 <div class="orbs" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -177,7 +179,7 @@ main.leave{animation:leave .21s ease-in forwards}
 <script>
 const $=s=>document.querySelector(s),R=v=>'R$ '+(+v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const wait=ms=>new Promise(r=>setTimeout(r,ms)),still=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+const wait=ms=>new Promise(r=>setTimeout(r,ms)),still=()=>{const mode=document.documentElement.dataset.motion;return mode==='reduced'||(mode!=='full'&&matchMedia('(prefers-reduced-motion: reduce)').matches)};
 let TOKEN=null;try{TOKEN=sessionStorage.getItem('tk')}catch(e){}
 const S={tab:'painel',mode:'g',board:'kan',q:'',filt:''};let P=[];
 const fmt={R:v=>R(v),p:v=>Math.round(v)+'%',q:v=>(Math.round(v*10)/10).toLocaleString('pt-BR')+'%',i:v=>String(Math.round(v))};
@@ -213,6 +215,9 @@ function pos(){return new Promise((ok,er)=>{if(!navigator.geolocation)return er(
 function themeButton(){const dark=document.documentElement.dataset.theme=='dark';return `<button class="chip ico theme-toggle" type="button" onclick="toggleTheme()" aria-label="Alternar tema claro ou escuro" aria-pressed="${dark}" title="Alternar tema">${dark?'☼':'☾'}</button>`}
 function syncThemeButtons(){document.querySelectorAll('.theme-toggle').forEach(button=>{const dark=document.documentElement.dataset.theme=='dark';button.textContent=dark?'☼':'☾';button.setAttribute('aria-pressed',String(dark))})}
 function toggleTheme(){const root=document.documentElement;root.classList.add('tt');const next=root.dataset.theme=='dark'?'light':'dark';root.dataset.theme=next;try{localStorage.setItem('theme',next)}catch(e){}syncThemeButtons();clearTimeout(toggleTheme.timer);toggleTheme.timer=setTimeout(()=>root.classList.remove('tt'),550)}
+function motionButton(){return `<label class="motion-control" title="Ativar ou reduzir animações"><input type="checkbox" ${still()?'':'checked'} onchange="toggleMotion(this.checked)"><span>Animações</span></label>`}
+function syncMotionButtons(){document.querySelectorAll('.motion-control input').forEach(input=>input.checked=!still())}
+function toggleMotion(enabled){const root=document.documentElement;root.dataset.motion=enabled?'full':'reduced';try{localStorage.setItem('motion',root.dataset.motion)}catch(e){}syncMotionButtons();if(enabled){const main=$('#main'),loginCard=$('.login .view');if(main){main.classList.remove('animate');main.querySelectorAll('.rise').forEach(item=>item.classList.remove('rise'));void main.offsetWidth;play(main,0)}else if(loginCard){loginCard.classList.remove('view');void loginCard.offsetWidth;loginCard.classList.add('view')}}}
 
 /* ---------- Troca de tela raiz (login ⇄ painel) ---------- */
 let SWAP=0;
@@ -225,7 +230,7 @@ let W=null,BUF=[],LAST=0,FILL=0;
 function stopWatch(){if(W!=null&&navigator.geolocation)navigator.geolocation.clearWatch(W);W=null;BUF=[]}
 function tela(){stopWatch();return TOKEN?app():login()}
 async function login(){stopWatch();
- if(!await swapRoot(`<div class="login"><div class="card lc view"><div class="login-head"><div class="logo"><i class="mk"></i>Flux</div>${themeButton()}</div>
+ if(!await swapRoot(`<div class="login"><div class="card lc view"><div class="login-head"><div class="logo"><i class="mk"></i>Flux</div><div class="login-tools">${motionButton()}${themeButton()}</div></div>
  <div id="lh"><h1 id="lt" class="lh1"></h1><p class="sub" id="lsub" style="margin-bottom:6px"></p></div>
  <div class="seg" id="seg"><i class="pill"></i><button data-m="g" class="${S.mode=='g'?'on':''}" onclick="setMode('g')">Gestor</button><button data-m="p" class="${S.mode=='p'?'on':''}" onclick="setMode('p')">Bater ponto</button></div>
  <div id="lf"></div><div id="live" class="msg" style="display:none"></div><div id="lm"></div></div></div>`))return;
@@ -277,7 +282,7 @@ const tabs=[['painel','Painel'],['quadros','Quadros'],['custeio','Custeio'],['ma
 const SKEL='<div class="sk" style="height:44px;width:min(300px,60%);margin:22px 0 14px"></div><div class="grid g2"><div class="sk"></div><div class="sk"></div></div><div class="sk" style="margin-top:12px;height:170px"></div>';
 async function app(){
  if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>Flux</span><div class="tabs" id="tabs"><i class="pill"></i>${tabs.map(t=>`<button data-t="${t[0]}" class="${S.tab==t[0]?'on':''}" onclick="go('${t[0]}')">${t[1]}</button>`).join('')}</div><span class="sp"></span>
- ${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
+ ${motionButton()}${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
  placeAll(true);go(S.tab,{first:true})}
 function markTabs(anim){document.querySelectorAll('#tabs button').forEach(b=>{const on=b.dataset.t==S.tab;b.classList.toggle('on',on);on?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current')});
  placePill($('#tabs'),!anim);const n=$('nav'),a=$('#tabs .on');if(n&&a&&n.scrollWidth>n.clientWidth)n.scrollTo({left:a.offsetLeft-n.clientWidth/2+a.offsetWidth/2+$('#tabs').offsetLeft,behavior:still()?'auto':'smooth'})}
