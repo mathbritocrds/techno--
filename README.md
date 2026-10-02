@@ -7,10 +7,6 @@ Sistema integrado de gestão: quadros (kanban e tabela), custeio, matéria-prima
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-# Opcional: habilita o resumo financeiro com Gemini
-export GEMINI_API_KEY='sua-chave-do-gemini'
-# Opcional: habilita o botão Resumir com IA do Financeiro via Hugging Face
-export HF_TOKEN='seu-token-do-hugging-face'
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
@@ -24,7 +20,7 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 - **Painéis de custo** que consolidam o DRE.
 - **Departamentos** e **espaços** (vínculo de e-mail de administrador).
 - **Integrações** (webhook, CSV, WhatsApp, ERP).
-- **Resumo com IA no Financeiro**: o botão envia nomes de setores e totais desta competência para Hugging Face e usa `FacebookAI/xlm-roberta-base` (`fill_mask`) para sugerir o setor em destaque; os valores exatos são calculados pelo servidor. A rota `/finance/department-summary` com Gemini permanece disponível para integrações, mas não é chamada pelo botão.
+- **Custeio mensal por setor**: consolida despesas pagas, em aberto e folha por competência.
 - **Exportação financeira em CSV** para contas a pagar e receber, com neutralização de fórmulas em campos de texto.
 - **Funcionários**: cadastro na tela de Folha e exportação autenticada da lista em CSV.
 - **Contas por e-mail**: primeiro usuário configura a empresa; somente um administrador autenticado pode criar acessos adicionais na mesma instalação.
@@ -37,8 +33,6 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 O SQLite registra os dados operacionais do sistema (equipe, tarefas, ponto, financeiro, estoque, departamentos, espaços, configurações, contas e mensagens) em `data/flux.db`. Esse caminho é resolvido a partir do projeto, independentemente do diretório de onde o servidor foi iniciado. É possível definir `DB_PATH` para apontar a outro arquivo ou volume persistente. Bancos e caches locais são ignorados pelo Git.
 
 SQLite foi mantido em vez de NoSQL porque este sistema tem relações entre funcionários, departamentos, folha, pagamentos e ponto, além de depender de transações consistentes. Para implantação em infraestrutura efêmera, configure um volume persistente ou migre para um banco gerenciado antes de usar dados reais.
-
-Configure `GEMINI_API_KEY` e `HF_TOKEN` como variáveis de ambiente no servidor; não inclua chaves no front-end nem em arquivos versionados. O botão só envia os dados financeiros ao Hugging Face depois de acionado.
 
 ## Testes
 

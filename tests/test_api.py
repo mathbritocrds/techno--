@@ -1,4 +1,4 @@
-import json, os, sqlite3, tempfile
+import os, sqlite3, tempfile
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ["ADMIN_PASSWORD"] = "segredo-de-teste"
 
@@ -72,9 +72,9 @@ def test_front_end_e_servido():
     page = client.get("/").text
     assert "SIGI" in page and 'class="boot-screen"' in page
     assert "accountShortcut" in page and 'data-t="conta"' not in page
-    assert page.count('onclick="run(resumirSetores,this)"') == 1
-    assert "onclick=\"run(resumirSetores,this)\"" in page
-    assert "api('/ai/fill-mask','POST'" in page and "TAB.ia=ia" not in page
+    assert "Custeio mensal por setor" in page
+    assert "/ai/fill-mask" not in page
+    assert "Resumir com IA" not in page and "finance/department-summary" not in page
 
 def test_ponto_tempo_real_e_comprovante(auth, ana):
     live = client.post("/clock/live", json={"employee_id": ana, "pin": "1234", "lat": -23.5501, "lng": -46.6301, "accuracy_m": 10}).json()
@@ -199,7 +199,7 @@ def test_financeiro_e_fluxo_de_caixa(auth, ana):
     assert client.get("/finance/summary", headers=auth).json()["pagar_aberto"] == 0
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1, "due": "2026-13-45"}, headers=auth).status_code == 400
 
-def test_custos_por_setor_e_resumo_ia_sem_chave(auth, monkeypatch):
+def test_custos_por_setor_e_rota_ia_removida(auth):
     department_id = client.post("/departments", json={"name": "Z Operações"}, headers=auth).json()["id"]
     employee_id = client.post("/employees", json={"name": "Joana", "salary": 3000, "pin": "2468",
                                                   "department_id": department_id}, headers=auth).json()["id"]
@@ -215,56 +215,11 @@ def test_custos_por_setor_e_resumo_ia_sem_chave(auth, monkeypatch):
     assert operations["paid"] == 0 and operations["open"] == 1200
     assert operations["payroll"] == 3840 and operations["total"] == 5040
     assert unassigned["open"] == 300 and data["totals"]["total"] == sum(item["total"] for item in data["departments"])
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    unavailable = client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth)
-    assert unavailable.status_code == 503 and "GEMINI_API_KEY" in unavailable.json()["detail"]
-    monkeypatch.setenv("GEMINI_API_KEY", "chave-de-teste")
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
-    captured = {}
-    class FakeResponse:
-        def __enter__(self): return self
-        def __exit__(self, *args): return False
-        def read(self):
-            return json.dumps({"candidates": [{"content": {"parts": [
-                {"text": "Operações concentra os maiores custos."}]}}]}).encode()
-    def fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["payload"] = json.loads(request.data)
-        assert request.get_header("X-goog-api-key") == "chave-de-teste"
-        assert timeout == 30
-        return FakeResponse()
-    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    summary = client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth)
-    assert summary.status_code == 200 and summary.json()["summary"] == "Operações concentra os maiores custos."
-    assert captured["url"].endswith("/models/gemini-2.5-flash:generateContent")
-    assert captured["payload"]["generationConfig"]["maxOutputTokens"] == 450
+    assert client.post("/finance/department-summary", json={"month": "2026-10"}, headers=auth).status_code == 405
     assert client.post("/finance", json={"kind": "receber", "description": "Venda", "amount": 200,
                                          "due": "2026-10-12", "department_id": department_id}, headers=auth).status_code == 400
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1,
                                          "due": "2026-10-12", "department_id": 9999}, headers=auth).status_code == 404
-
-def test_huggingface_fill_mask_autenticado_e_limitado(auth, monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    assert client.post("/ai/fill-mask", json={"text": "A resposta é <mask>."}).status_code == 401
-    assert client.post("/ai/fill-mask", json={"text": "A resposta é <mask>."}, headers=auth).status_code == 503
-    monkeypatch.setenv("HF_TOKEN", "token-de-teste")
-    assert client.post("/ai/fill-mask", json={"text": "Uma frase sem marcador."}, headers=auth).status_code == 400
-    assert client.post("/ai/fill-mask", json={"text": "Dois <mask> marcadores <mask>."}, headers=auth).status_code == 400
-    captured = {}
-    class FakeInferenceClient:
-        def __init__(self, provider, api_key):
-            captured["provider"], captured["api_key"] = provider, api_key
-        def fill_mask(self, text, model, top_k=None, targets=None):
-            captured.update(text=text, model=model, top_k=top_k, targets=targets)
-            return [{"token_str": "vida", "score": 0.91, "sequence": "A resposta é vida."}]
-    monkeypatch.setattr(main, "InferenceClient", FakeInferenceClient)
-    response = client.post("/ai/fill-mask", json={"text": "A resposta é <mask>."}, headers=auth)
-    assert response.status_code == 200
-    assert response.json()["suggestions"] == [{"token": "vida", "score": 0.91, "sequence": "A resposta é vida."}]
-    assert captured == {"provider": "hf-inference", "api_key": "token-de-teste",
-                        "text": "A resposta é <mask>.", "model": "FacebookAI/xlm-roberta-base", "top_k": 5, "targets": None}
-    targeted = client.post("/ai/fill-mask", json={"text": "Setor de maior custo: <mask>.", "targets": ["Operações", "operações", "Vendas"]}, headers=auth)
-    assert targeted.status_code == 200 and captured["targets"] == ["Operações", "Vendas"]
 
 def test_logout_invalida_sessao(auth):
     tk = client.post("/auth/login", json={"email": "admin@flux.test", "password": "segredo-de-teste"}).json()["token"]

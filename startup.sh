@@ -7,7 +7,7 @@ if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8080/docs; then
   exit 0
 fi
 mkdir -p "$ROOT/data" "$ROOT/app/static"
-if ! python3 -c "import fastapi,uvicorn,huggingface_hub" 2>/dev/null; then
+if ! python3 -c "import fastapi,uvicorn" 2>/dev/null; then
   pip3 install -q -r "$ROOT/requirements.txt"
 fi
 export TZ_OFFSET_HOURS="${TZ_OFFSET_HOURS:--3}"

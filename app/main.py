@@ -2,8 +2,7 @@
 Rodar (na raiz do repositório):  uvicorn app.main:app --reload
 Docs:   http://localhost:8000/docs
 """
-import csv, hashlib, hmac, io, json, math, os, secrets, sqlite3, time
-import urllib.error, urllib.request
+import csv, hashlib, hmac, io, math, os, secrets, sqlite3, time
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -12,7 +11,6 @@ from typing import Literal, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from huggingface_hub import InferenceClient
 from pydantic import BaseModel, Field
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -699,74 +697,6 @@ def department_costs(month: Optional[str] = None):
 @app.get("/finance/department-costs", dependencies=[Depends(admin)])
 def get_department_costs(month: Optional[str] = None):
     return department_costs(month)
-
-class FinanceAnalysisIn(BaseModel):
-    month: Optional[str] = None
-
-@app.post("/finance/department-summary", dependencies=[Depends(admin)])
-def summarize_department_costs(request_data: FinanceAnalysisIn):
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise HTTPException(503, "Configure GEMINI_API_KEY no servidor para ativar o resumo. Os custos continuam disponíveis no gráfico.")
-    costs = department_costs(request_data.month)
-    prompt = ("Analise os custos mensais por setor da empresa e responda em português brasileiro. "
-              "Use somente os totais fornecidos, não invente causas nem recomendações sem evidência. "
-              "Dê uma visão geral curta e depois uma linha por setor, destacando folha, despesas pagas e abertas. "
-              "Sinalize concentrações relevantes e custos ainda sem setor. Dados: "
-              + json.dumps(costs, ensure_ascii=False, separators=(",", ":")))
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    body = json.dumps({"system_instruction": {"parts": [{"text": "Você é um analista financeiro cuidadoso. Diferencie fatos de recomendações e seja conciso."}]},
-                       "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                       "generationConfig": {"temperature": 0.3, "maxOutputTokens": 450}}).encode()
-    req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                                 data=body, headers={"x-goog-api-key": api_key,
-                                                    "Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        raise HTTPException(502, f"O serviço de IA respondeu com erro ({exc.code}).") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise HTTPException(502, "Não foi possível conectar ao serviço de IA.") from exc
-    text = "\n".join(part["text"] for candidate in result.get("candidates", [])
-                     for part in candidate.get("content", {}).get("parts", [])
-                     if isinstance(part.get("text"), str)).strip()
-    if not text:
-        raise HTTPException(502, "O serviço de IA não retornou um resumo.")
-    return {"month": costs["month"], "summary": text}
-
-class FillMaskIn(BaseModel):
-    text: str = Field(min_length=5, max_length=500)
-    targets: Optional[list[str]] = Field(default=None, max_length=5)
-
-@app.post("/ai/fill-mask", dependencies=[Depends(admin)])
-def suggest_mask_tokens(request_data: FillMaskIn):
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        raise HTTPException(503, "Configure HF_TOKEN no servidor para ativar as sugestões de texto.")
-    text = request_data.text.strip()
-    if text.count("<mask>") != 1:
-        raise HTTPException(400, "Inclua exatamente um marcador <mask> na frase.")
-    targets = []
-    for value in request_data.targets or []:
-        target = value.strip()
-        if not target or len(target) > 80:
-            raise HTTPException(400, "Cada alternativa deve ter entre 1 e 80 caracteres.")
-        if target.casefold() not in {item.casefold() for item in targets}:
-            targets.append(target)
-    try:
-        client = InferenceClient(provider="hf-inference", api_key=token)
-        if targets:
-            output = client.fill_mask(text, model="FacebookAI/xlm-roberta-base", targets=targets)
-        else:
-            output = client.fill_mask(text, model="FacebookAI/xlm-roberta-base", top_k=5)
-    except Exception as exc:
-        raise HTTPException(502, "Não foi possível obter sugestões do Hugging Face.") from exc
-    suggestions = [{"token": item["token_str"], "score": round(float(item["score"]), 6),
-                    "sequence": item["sequence"]} for item in output[:5]]
-    if not suggestions:
-        raise HTTPException(502, "O modelo não retornou sugestões.")
-    return {"model": "FacebookAI/xlm-roberta-base", "suggestions": suggestions}
 
 # ---------- Matéria-prima ----------
 class MaterialIn(BaseModel):
