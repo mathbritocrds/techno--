@@ -72,6 +72,8 @@ def test_front_end_e_servido():
     page = client.get("/").text
     assert "SIGI" in page and 'class="boot-screen"' in page
     assert "accountShortcut" in page and 'data-t="conta"' not in page
+    assert "const formG=" in page and "Criar primeira conta da empresa" in page
+    assert "Excluir remove o acesso e arquiva o cadastro" in page
     assert "Custeio mensal por setor" in page
     assert "/ai/fill-mask" not in page
     assert "Resumir com IA" not in page and "finance/department-summary" not in page
@@ -220,6 +222,37 @@ def test_custos_por_setor_e_rota_ia_removida(auth):
                                          "due": "2026-10-12", "department_id": department_id}, headers=auth).status_code == 400
     assert client.post("/finance", json={"kind": "pagar", "description": "x", "amount": 1,
                                          "due": "2026-10-12", "department_id": 9999}, headers=auth).status_code == 404
+
+def test_exclusao_de_funcionario_revoga_acesso_e_preserva_historico(auth):
+    employee_id = client.post("/employees", json={"name": "Excluir", "salary": 2500, "pin": "2468"},
+                              headers=auth).json()["id"]
+    assert client.post(f"/employees/{employee_id}/account",
+                       json={"email": "excluir@flux.test", "password": "senha-segura"}, headers=auth).status_code == 201
+    login = client.post("/auth/employee/login",
+                        json={"email": "excluir@flux.test", "password": "senha-segura"}).json()
+    employee_auth = {"Authorization": "Bearer " + login["token"]}
+    with main.db() as c:
+        c.execute("INSERT INTO time_entries(employee_id,kind,at,accepted) VALUES(?,?,?,1)",
+                  (employee_id, "entrada", "2026-10-03T09:00:00+00:00"))
+
+    assert client.delete(f"/employees/{employee_id}").status_code == 401
+    deleted = client.delete(f"/employees/{employee_id}", headers=auth)
+    assert deleted.status_code == 200 and deleted.json() == {"ok": True, "archived": True}
+    assert client.get("/messages", headers=employee_auth).status_code == 401
+    assert client.post("/auth/employee/login",
+                       json={"email": "excluir@flux.test", "password": "senha-segura"}).status_code == 401
+    employee = next(e for e in client.get("/employees", headers=auth).json() if e["id"] == employee_id)
+    assert employee["active"] == 0 and employee["account_email"] == ""
+    with main.db() as c:
+        archived = c.execute("SELECT active,pin_salt,pin_hash,account_salt,account_hash FROM employees WHERE id=?",
+                             (employee_id,)).fetchone()
+        history = c.execute("SELECT COUNT(*) FROM time_entries WHERE employee_id=?", (employee_id,)).fetchone()[0]
+        sessions = c.execute("SELECT COUNT(*) FROM sessions WHERE role='employee' AND subject_id=?",
+                             (employee_id,)).fetchone()[0]
+    assert tuple(archived) == (0, None, None, None, None)
+    assert history == 1 and sessions == 0
+    assert client.delete(f"/employees/{employee_id}", headers=auth).status_code == 200
+    assert client.delete("/employees/999999", headers=auth).status_code == 404
 
 def test_logout_invalida_sessao(auth):
     tk = client.post("/auth/login", json={"email": "admin@flux.test", "password": "segredo-de-teste"}).json()["token"]

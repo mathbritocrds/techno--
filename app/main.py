@@ -361,6 +361,17 @@ def edit_employee(eid: int, p: EmployeePatch):
         if not cur.rowcount: raise HTTPException(404, "Funcionário não encontrado.")
     return {"ok": True}
 
+@app.delete("/employees/{eid}", dependencies=[Depends(admin)])
+def delete_employee(eid: int):
+    with db() as c:
+        employee = c.execute("SELECT id FROM employees WHERE id=?", (eid,)).fetchone()
+        if not employee:
+            raise HTTPException(404, "Funcionário não encontrado.")
+        c.execute("""UPDATE employees SET active=0,pin_salt=NULL,pin_hash=NULL,failed_pins=0,
+                     account_email='',account_salt=NULL,account_hash=NULL WHERE id=?""", (eid,))
+        c.execute("DELETE FROM sessions WHERE role='employee' AND subject_id=?", (eid,))
+    return {"ok": True, "archived": True}
+
 class EmployeeAccount(BaseModel):
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=8, max_length=128)
