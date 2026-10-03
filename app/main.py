@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
-import psycopg
+import psycopg2
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -407,7 +407,7 @@ def create_employee_account(eid: int, b: EmployeeAccount):
         try:
             c.execute("UPDATE employees SET account_email=?,account_salt=?,account_hash=? WHERE id=?",
                       (email, salt, hash_pin(b.password, salt), eid))
-        except (sqlite3.IntegrityError, psycopg.IntegrityError):
+        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
             raise HTTPException(409, "Este e-mail já possui uma conta de funcionário.")
     return {"email": email}
 

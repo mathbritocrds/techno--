@@ -3,11 +3,23 @@ from pathlib import Path
 from app.database import CompatRow, PostgresConnection
 
 
+class FakeConnection:
+    def __init__(self):
+        self.calls = []
+
+    def cursor(self, cursor_factory=None):
+        return FakeCursor(self)
+
+
 class FakeCursor:
     rowcount = 1
 
-    def __init__(self, rows=()):
-        self.rows = list(rows)
+    def __init__(self, connection):
+        self.connection = connection
+        self.rows = []
+
+    def execute(self, query, params):
+        self.connection.calls.append((query, params))
 
     def fetchone(self):
         return self.rows.pop(0) if self.rows else None
@@ -15,18 +27,6 @@ class FakeCursor:
     def fetchall(self):
         rows, self.rows = self.rows, []
         return rows
-
-    def __iter__(self):
-        return iter(self.fetchall())
-
-
-class FakeConnection:
-    def __init__(self):
-        self.calls = []
-
-    def execute(self, query, params):
-        self.calls.append((query, params))
-        return FakeCursor()
 
 
 def test_postgres_adapter_translates_placeholders_and_registration_lock():

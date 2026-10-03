@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 
 class CompatRow(dict):
@@ -42,7 +42,12 @@ class PostgresConnection:
         query = query.replace("?", "%s")
         if query.strip().upper() == "BEGIN IMMEDIATE":
             query = "SELECT pg_advisory_xact_lock(624318209)"
-        return PostgresCursor(self.connection.execute(query, params))
+        cursor = self.connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(query, params)
+        result = PostgresCursor(cursor)
+        if query.startswith("SELECT pg_advisory_xact_lock"):
+            result.fetchall()
+        return result
 
     def commit(self):
         self.connection.commit()
@@ -52,4 +57,4 @@ class PostgresConnection:
 
 
 def connect_postgres(url):
-    return PostgresConnection(psycopg.connect(url, sslmode="require", row_factory=dict_row))
+    return PostgresConnection(psycopg2.connect(url, sslmode="require"))

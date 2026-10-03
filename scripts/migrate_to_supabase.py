@@ -4,7 +4,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-import psycopg
+import psycopg2
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.getenv("DB_PATH") or ROOT / "data" / "flux.db")
@@ -39,7 +39,7 @@ def main():
 
     schema = (ROOT / "supabase" / "schema.sql").read_text()
     counts = {}
-    with sqlite3.connect(DB_PATH) as source, psycopg.connect(DATABASE_URL, sslmode="require") as target:
+    with sqlite3.connect(DB_PATH) as source, psycopg2.connect(DATABASE_URL, sslmode="require") as target:
         source.row_factory = sqlite3.Row
         with target.cursor() as cursor:
             for statement in schema.split(";"):
