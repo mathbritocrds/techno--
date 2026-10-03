@@ -30,9 +30,14 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 
 ## Persistência
 
-O SQLite registra os dados operacionais do sistema (equipe, tarefas, ponto, financeiro, estoque, departamentos, espaços, configurações, contas e mensagens) em `data/flux.db`. Esse caminho é resolvido a partir do projeto, independentemente do diretório de onde o servidor foi iniciado. É possível definir `DB_PATH` para apontar a outro arquivo ou volume persistente. Bancos e caches locais são ignorados pelo Git.
+Por padrão, o SQLite registra os dados operacionais do sistema em `data/flux.db`. Para conectar um projeto Supabase:
 
-SQLite foi mantido em vez de NoSQL porque este sistema tem relações entre funcionários, departamentos, folha, pagamentos e ponto, além de depender de transações consistentes. Para implantação em infraestrutura efêmera, configure um volume persistente ou migre para um banco gerenciado antes de usar dados reais.
+1. Copie a connection string PostgreSQL do painel do Supabase.
+2. Configure-a como segredo `SUPABASE_DATABASE_URL` no ambiente do servidor. Não compartilhe nem salve essa senha no código, no Git ou no navegador.
+3. Antes de iniciar o aplicativo conectado ao Supabase, execute `python scripts/migrate_to_supabase.py` nesse mesmo ambiente para importar os dados de `data/flux.db`.
+4. Reinicie o aplicativo. A partir daí, ele usa o Supabase; sem `SUPABASE_DATABASE_URL`, usa SQLite local.
+
+O esquema está em [`supabase/schema.sql`](supabase/schema.sql), com RLS ativado e acesso direto pela API pública do Supabase revogado para as tabelas da aplicação. A migração é transacional, preserva os IDs e para sem alterar os dados se encontrar tabelas de destino preenchidas. Faça um backup de `data/flux.db` antes de migrar.
 
 ## Testes
 

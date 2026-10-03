@@ -6,15 +6,20 @@ import csv, hashlib, hmac, io, math, os, secrets, sqlite3, time
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Literal, Optional
 
+import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.database import connect_postgres
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.abspath(os.getenv("DB_PATH") or os.path.join(APP_DIR, "..", "data", "flux.db"))
+SUPABASE_DATABASE_URL = os.getenv("SUPABASE_DATABASE_URL", "").strip()
 os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")                    # opcional: acesso direto via API (vazio = desligado)
 SESSION_HOURS = 12
@@ -95,9 +100,12 @@ MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
 
 @contextmanager
 def db():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
+    if SUPABASE_DATABASE_URL:
+        con = connect_postgres(SUPABASE_DATABASE_URL)
+    else:
+        con = sqlite3.connect(DB)
+        con.row_factory = sqlite3.Row
+        con.execute("PRAGMA foreign_keys=ON")
     try:
         yield con
         con.commit()
@@ -105,12 +113,18 @@ def db():
         con.close()
 
 with db() as c:
-    c.executescript(SCHEMA)
-    for m in MIGRATIONS:                     # bancos criados em versões anteriores
-        try: c.execute(m)
-        except sqlite3.OperationalError: pass
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_nsr ON time_entries(nsr) WHERE nsr IS NOT NULL")
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_employee_account_email ON employees(account_email COLLATE NOCASE) WHERE account_email IS NOT NULL AND account_email != ''")
+    if SUPABASE_DATABASE_URL:
+        schema = Path(APP_DIR, "..", "supabase", "schema.sql").read_text()
+        for statement in schema.split(";"):
+            if statement.strip():
+                c.execute(statement)
+    else:
+        c.executescript(SCHEMA)
+        for m in MIGRATIONS:                 # bancos criados em versões anteriores
+            try: c.execute(m)
+            except sqlite3.OperationalError: pass
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_nsr ON time_entries(nsr) WHERE nsr IS NOT NULL")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_employee_account_email ON employees(lower(account_email)) WHERE account_email IS NOT NULL AND account_email != ''")
 
 app = FastAPI(title="SIGI Gestão API")
 
@@ -146,8 +160,8 @@ def admin(authorization: str = Header(default=""), x_admin_token: str = Header(d
     if authorization.startswith("Bearer "):
         h = hashlib.sha256(authorization[7:].encode()).hexdigest()
         with db() as c:
-            r = c.execute("SELECT user,expires,role FROM sessions WHERE token=?", (h,)).fetchone()
-            account = c.execute("SELECT 1 FROM admins WHERE user=?", (r["user"],)).fetchone() if r else None
+            r = c.execute('SELECT "user",expires,role FROM sessions WHERE token=?', (h,)).fetchone()
+            account = c.execute('SELECT 1 FROM admins WHERE "user"=?', (r["user"],)).fetchone() if r else None
         if r and r["expires"] > time.time() and r["role"] == "admin" and account:
             return
     if x_admin_token and hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
@@ -172,24 +186,24 @@ def session_user(c, authorization, now):
     if not authorization.startswith("Bearer "):
         return None
     token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
-    session = c.execute("SELECT user,expires,role FROM sessions WHERE token=?", (token_hash,)).fetchone()
+    session = c.execute('SELECT "user",expires,role FROM sessions WHERE token=?', (token_hash,)).fetchone()
     if not session or session["expires"] <= now or session["role"] != "admin":
         return None
-    return session["user"] if c.execute("SELECT 1 FROM admins WHERE user=?", (session["user"],)).fetchone() else None
+    return session["user"] if c.execute('SELECT 1 FROM admins WHERE "user"=?', (session["user"],)).fetchone() else None
 
 def principal(authorization: str = Header(default="")):
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
     token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
     with db() as c:
-        session = c.execute("SELECT user,expires,role,subject_id FROM sessions WHERE token=?", (token_hash,)).fetchone()
+        session = c.execute('SELECT "user",expires,role,subject_id FROM sessions WHERE token=?', (token_hash,)).fetchone()
         if not session or session["expires"] <= time.time():
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
         if session["role"] == "admin":
-            if not c.execute("SELECT 1 FROM admins WHERE user=?", (session["user"],)).fetchone():
+            if not c.execute('SELECT 1 FROM admins WHERE "user"=?', (session["user"],)).fetchone():
                 raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
             return {"role": "admin", "user": session["user"], "employee_id": None}
-        employee = c.execute("SELECT id,name FROM employees WHERE id=? AND account_email=? COLLATE NOCASE AND active=1",
+        employee = c.execute("SELECT id,name FROM employees WHERE id=? AND lower(account_email)=lower(?) AND active=1",
                              (session["subject_id"], session["user"])).fetchone()
         if not employee:
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
@@ -210,7 +224,7 @@ def register_account(b: Registration, authorization: str = Header(default="")):
         creator = session_user(c, authorization, now)
         if account_exists and not creator:
             raise HTTPException(401, "Entre como administrador para criar outro acesso.")
-        if c.execute("SELECT 1 FROM admins WHERE user=?", (email,)).fetchone():
+        if c.execute('SELECT 1 FROM admins WHERE "user"=?', (email,)).fetchone():
             raise HTTPException(409, "Este e-mail já possui acesso.")
         current = settings(c)
         company_name = current.get("co_name", "").strip()
@@ -219,15 +233,17 @@ def register_account(b: Registration, authorization: str = Header(default="")):
                              or company_cnpj != b.cnpj):
             raise HTTPException(409, "Esta instalação já pertence a outra empresa.")
         salt = secrets.token_hex(16)
-        c.execute("INSERT INTO admins(user,salt,hash) VALUES(?,?,?)",
+        c.execute('INSERT INTO admins("user",salt,hash) VALUES(?,?,?)',
                   (email, salt, hash_pin(b.password, salt)))
         if not company_name:
-            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('co_name',?)", (b.company_name.strip(),))
-            c.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('co_cnpj',?)", (b.cnpj,))
+            c.execute("INSERT INTO settings(k,v) VALUES('co_name',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                      (b.company_name.strip(),))
+            c.execute("INSERT INTO settings(k,v) VALUES('co_cnpj',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                      (b.cnpj,))
         token = None
         if not account_exists:
             token = secrets.token_urlsafe(32)
-            c.execute("INSERT INTO sessions(token,user,expires,role) VALUES(?,?,?,'admin')",
+            c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,\'admin\')',
                       (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600))
     return {"email": email, "token": token}
 
@@ -238,14 +254,14 @@ def login(b: Login):
     if n >= 5 and now - t < 300:
         raise HTTPException(429, "Muitas tentativas. Aguarde 5 minutos.")
     with db() as c:
-        a = c.execute("SELECT * FROM admins WHERE user=?", (k,)).fetchone()
+        a = c.execute('SELECT * FROM admins WHERE "user"=?', (k,)).fetchone()
         if not a or not hmac.compare_digest(hash_pin(b.password, a["salt"]), a["hash"]):
             _fails[k] = ((n if now - t < 300 else 0) + 1, now)
             raise HTTPException(401, "Usuário ou senha incorretos.")
         _fails.pop(k, None)
         tok = secrets.token_urlsafe(32)
         c.execute("DELETE FROM sessions WHERE expires<?", (now,))
-        c.execute("INSERT INTO sessions(token,user,expires,role) VALUES(?,?,?,'admin')",
+        c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,\'admin\')',
                   (hashlib.sha256(tok.encode()).hexdigest(), k, now + SESSION_HOURS * 3600))
     return {"token": tok, "user": k}
 
@@ -256,7 +272,7 @@ def employee_login(b: Login):
     if n >= 5 and now - t < 300:
         raise HTTPException(429, "Muitas tentativas. Aguarde 5 minutos.")
     with db() as c:
-        e = c.execute("SELECT id,name,account_salt,account_hash FROM employees WHERE account_email=? COLLATE NOCASE AND active=1",
+        e = c.execute("SELECT id,name,account_salt,account_hash FROM employees WHERE lower(account_email)=lower(?) AND active=1",
                        (email,)).fetchone()
         if not e or not e["account_hash"] or not hmac.compare_digest(hash_pin(b.password, e["account_salt"]), e["account_hash"]):
             _fails[email] = ((n if now - t < 300 else 0) + 1, now)
@@ -264,7 +280,7 @@ def employee_login(b: Login):
         _fails.pop(email, None)
         token = secrets.token_urlsafe(32)
         c.execute("DELETE FROM sessions WHERE expires<?", (now,))
-        c.execute("INSERT INTO sessions(token,user,expires,role,subject_id) VALUES(?,?,?,'employee',?)",
+        c.execute('INSERT INTO sessions(token,"user",expires,role,subject_id) VALUES(?,?,?,\'employee\',?)',
                   (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600, e["id"]))
     return {"token": token, "user": email, "role": "employee", "employee_id": e["id"], "name": e["name"]}
 
@@ -287,7 +303,8 @@ class Company(BaseModel):
 def put_settings(d: dict):
     with db() as c:
         for k, v in d.items():
-            c.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, str(v)))
+            c.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                      (k, str(v)))
 
 @app.put("/settings/workplace", dependencies=[Depends(admin)])
 def set_workplace(w: Workplace):
@@ -326,9 +343,10 @@ class EmployeePatch(BaseModel):
 def add_employee(e: EmployeeIn):
     salt = secrets.token_hex(16)
     with db() as c:
-        cur = c.execute("INSERT INTO employees(name,cpf,role,salary,benefits,pin_salt,pin_hash,department_id) VALUES(?,?,?,?,?,?,?,?)",
+        cur = c.execute("INSERT INTO employees(name,cpf,role,salary,benefits,pin_salt,pin_hash,department_id) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
                         (e.name, e.cpf, e.role, e.salary, e.benefits, salt, hash_pin(e.pin, salt), e.department_id))
-    return {"id": cur.lastrowid}
+        employee_id = cur.fetchall()[0]["id"]
+    return {"id": employee_id}
 
 @app.get("/employees", dependencies=[Depends(admin)])
 def list_employees():
@@ -342,7 +360,7 @@ def export_employees():
         employees = c.execute("""SELECT e.id,e.name,e.cpf,e.role,e.salary,e.benefits,
             COALESCE(d.name,'') AS department,CASE WHEN e.active=1 THEN 'Ativo' ELSE 'Inativo' END AS status
             FROM employees e LEFT JOIN departments d ON d.id=e.department_id
-            ORDER BY e.name COLLATE NOCASE,e.id""").fetchall()
+            ORDER BY lower(e.name),e.id""").fetchall()
     out = io.StringIO()
     out.write("\ufeff")
     writer = csv.writer(out, delimiter=";")
@@ -384,12 +402,12 @@ def create_employee_account(eid: int, b: EmployeeAccount):
         employee = c.execute("SELECT id FROM employees WHERE id=? AND active=1", (eid,)).fetchone()
         if not employee:
             raise HTTPException(404, "Funcionário não encontrado ou inativo.")
-        if c.execute("SELECT 1 FROM admins WHERE user=? COLLATE NOCASE", (email,)).fetchone():
+        if c.execute('SELECT 1 FROM admins WHERE lower("user")=lower(?)', (email,)).fetchone():
             raise HTTPException(409, "Este e-mail já pertence a uma conta administrativa.")
         try:
             c.execute("UPDATE employees SET account_email=?,account_salt=?,account_hash=? WHERE id=?",
                       (email, salt, hash_pin(b.password, salt), eid))
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError, psycopg.IntegrityError):
             raise HTTPException(409, "Este e-mail já possui uma conta de funcionário.")
     return {"email": email}
 
@@ -433,9 +451,10 @@ def send_message(b: MessageIn, who: dict = Depends(principal)):
     sender_name = who.get("name") or who["user"]
     with db() as c:
         cur = c.execute("INSERT INTO messages(scope,employee_id,sender_role,sender_employee_id,sender_name,body,created_at) "
-                        "VALUES(?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?) RETURNING id",
                         (b.scope, employee_id, who["role"], sender_employee_id, sender_name, body, iso(utcnow())))
-        message = c.execute("SELECT * FROM messages WHERE id=?", (cur.lastrowid,)).fetchone()
+        message_id = cur.fetchall()[0]["id"]
+        message = c.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
     return dict(message)
 
 # ---------- Ponto: espelho de horas ----------
@@ -510,9 +529,10 @@ def with_costs(p):
 @app.post("/products", dependencies=[Depends(admin)], status_code=201)
 def add_product(p: ProductIn):
     with db() as c:
-        cur = c.execute("INSERT INTO products(name,material,labor,overhead,price) VALUES(?,?,?,?,?)",
+        cur = c.execute("INSERT INTO products(name,material,labor,overhead,price) VALUES(?,?,?,?,?) RETURNING id",
                         (p.name, p.material, p.labor, p.overhead, p.price))
-    return {"id": cur.lastrowid}
+        product_id = cur.fetchall()[0]["id"]
+    return {"id": product_id}
 
 @app.get("/products", dependencies=[Depends(admin)])
 def list_products():
@@ -553,9 +573,10 @@ def norm_task(t: TaskIn):
 def add_task(t: TaskIn):
     t = norm_task(t)
     with db() as c:
-        cur = c.execute("INSERT INTO tasks(title,assignee,due,status,priority,progress,approval,severity) VALUES(?,?,?,?,?,?,?,?)",
+        cur = c.execute("INSERT INTO tasks(title,assignee,due,status,priority,progress,approval,severity) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
                         (t.title, t.assignee, t.due, t.status, t.priority, t.progress, t.approval, t.severity))
-    return {"id": cur.lastrowid}
+        task_id = cur.fetchall()[0]["id"]
+    return {"id": task_id}
 
 @app.get("/tasks", dependencies=[Depends(admin)])
 def list_tasks():
@@ -606,9 +627,10 @@ def add_tx(t: Tx):
             "SELECT 1 FROM departments WHERE id=?", (t.department_id,)
         ).fetchone():
             raise HTTPException(404, "Setor não encontrado.")
-        cur = c.execute("INSERT INTO transactions(kind,description,amount,due,department_id) VALUES(?,?,?,?,?)",
+        cur = c.execute("INSERT INTO transactions(kind,description,amount,due,department_id) VALUES(?,?,?,?,?) RETURNING id",
                         (t.kind, t.description, t.amount, t.due, t.department_id))
-    return {"id": cur.lastrowid}
+        transaction_id = cur.fetchall()[0]["id"]
+    return {"id": transaction_id}
 
 @app.get("/finance", dependencies=[Depends(admin)])
 def list_tx(status: str = "open"):
@@ -719,9 +741,10 @@ def with_mat(m):
 @app.post("/materials", dependencies=[Depends(admin)], status_code=201)
 def add_material(m: MaterialIn):
     with db() as c:
-        cur = c.execute("INSERT INTO materials(name,unit,stock,unit_cost) VALUES(?,?,?,?)",
+        cur = c.execute("INSERT INTO materials(name,unit,stock,unit_cost) VALUES(?,?,?,?) RETURNING id",
                         (m.name, m.unit, m.stock, m.unit_cost))
-    return {"id": cur.lastrowid}
+        material_id = cur.fetchall()[0]["id"]
+    return {"id": material_id}
 
 @app.get("/materials", dependencies=[Depends(admin)])
 def list_materials():
@@ -748,8 +771,9 @@ class DeptIn(BaseModel):
 @app.post("/departments", dependencies=[Depends(admin)], status_code=201)
 def add_dept(d: DeptIn):
     with db() as c:
-        cur = c.execute("INSERT INTO departments(name,lead) VALUES(?,?)", (d.name, d.lead))
-    return {"id": cur.lastrowid}
+        cur = c.execute("INSERT INTO departments(name,lead) VALUES(?,?) RETURNING id", (d.name, d.lead))
+        department_id = cur.fetchall()[0]["id"]
+    return {"id": department_id}
 
 @app.get("/departments", dependencies=[Depends(admin)])
 def list_depts():
@@ -783,8 +807,9 @@ class SpaceIn(BaseModel):
 def add_space(s: SpaceIn):
     if s.kind not in SPACE_KINDS: raise HTTPException(400, "Tipo de espaço inválido.")
     with db() as c:
-        cur = c.execute("INSERT INTO spaces(name,kind,admin_email) VALUES(?,?,?)", (s.name, s.kind, s.admin_email))
-    return {"id": cur.lastrowid}
+        cur = c.execute("INSERT INTO spaces(name,kind,admin_email) VALUES(?,?,?) RETURNING id", (s.name, s.kind, s.admin_email))
+        space_id = cur.fetchall()[0]["id"]
+    return {"id": space_id}
 
 @app.get("/spaces", dependencies=[Depends(admin)])
 def list_spaces():
@@ -819,9 +844,10 @@ def with_analysis(a):
 @app.post("/cost-analyses", dependencies=[Depends(admin)], status_code=201)
 def add_analysis(a: AnalysisIn):
     with db() as c:
-        cur = c.execute("INSERT INTO cost_analyses(title,revenue,material,opex,tax) VALUES(?,?,?,?,?)",
+        cur = c.execute("INSERT INTO cost_analyses(title,revenue,material,opex,tax) VALUES(?,?,?,?,?) RETURNING id",
                         (a.title, a.revenue, a.material, a.opex, a.tax))
-    return {"id": cur.lastrowid}
+        analysis_id = cur.fetchall()[0]["id"]
+    return {"id": analysis_id}
 
 @app.get("/cost-analyses", dependencies=[Depends(admin)])
 def list_analyses():
@@ -865,9 +891,10 @@ class IntegrationIn(BaseModel):
 def add_integration(i: IntegrationIn):
     if i.kind not in INT_KINDS: raise HTTPException(400, "Tipo de integração inválido.")
     with db() as c:
-        cur = c.execute("INSERT INTO integrations(name,kind,endpoint,active) VALUES(?,?,?,?)",
+        cur = c.execute("INSERT INTO integrations(name,kind,endpoint,active) VALUES(?,?,?,?) RETURNING id",
                         (i.name, i.kind, i.endpoint, int(i.active)))
-    return {"id": cur.lastrowid}
+        integration_id = cur.fetchall()[0]["id"]
+    return {"id": integration_id}
 
 @app.get("/integrations", dependencies=[Depends(admin)])
 def list_integrations():
