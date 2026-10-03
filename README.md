@@ -32,7 +32,7 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 
 Por padrão, o SQLite registra os dados operacionais do sistema em `data/flux.db`. Para conectar um projeto Supabase:
 
-1. Copie a connection string PostgreSQL do painel do Supabase.
+1. Copie a connection string PostgreSQL do painel do Supabase. O aplicativo aceita os formatos `postgresql://` e o legado `postgres://`.
 2. Configure-a como segredo `SUPABASE_DATABASE_URL` no ambiente do servidor. Não compartilhe nem salve essa senha no código, no Git ou no navegador.
 3. Antes de iniciar o aplicativo conectado ao Supabase, execute `python scripts/migrate_to_supabase.py` nesse mesmo ambiente para importar os dados de `data/flux.db`.
 4. Reinicie o aplicativo. A partir daí, ele usa o Supabase; sem `SUPABASE_DATABASE_URL`, usa SQLite local.

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app import database
 from app.database import CompatRow, PostgresConnection
 
 
@@ -47,6 +48,31 @@ def test_postgres_rows_support_mapping_and_sqlite_style_index_access():
 
     assert row["id"] == row[0] == 23
     assert dict(row) == {"id": 23, "name": "Ana"}
+
+
+def test_connect_postgres_normalizes_legacy_url_scheme(monkeypatch):
+    calls = []
+    raw = FakeConnection()
+    monkeypatch.setattr(database.psycopg2, "connect", lambda url, **kwargs: calls.append((url, kwargs)) or raw)
+
+    connection = database.connect_postgres("  postgres://user:secret@db.example:5432/app  ")
+
+    assert calls == [
+        ("postgresql://user:secret@db.example:5432/app", {"sslmode": "require"}),
+    ]
+    assert isinstance(connection, PostgresConnection)
+
+
+def test_connect_postgres_preserves_standard_url_scheme(monkeypatch):
+    calls = []
+    raw = FakeConnection()
+    monkeypatch.setattr(database.psycopg2, "connect", lambda url, **kwargs: calls.append((url, kwargs)) or raw)
+
+    database.connect_postgres("postgresql://user:secret@db.example:5432/app")
+
+    assert calls == [
+        ("postgresql://user:secret@db.example:5432/app", {"sslmode": "require"}),
+    ]
 
 
 def test_supabase_schema_has_all_tables_and_blocks_public_api_access():

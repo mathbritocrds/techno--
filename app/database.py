@@ -57,4 +57,7 @@ class PostgresConnection:
 
 
 def connect_postgres(url):
+    url = url.strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url.removeprefix("postgres://")
     return PostgresConnection(psycopg2.connect(url, sslmode="require"))
