@@ -35,10 +35,20 @@ def test_postgres_adapter_translates_placeholders_and_registration_lock():
     connection = PostgresConnection(raw)
 
     connection.execute("SELECT id FROM employees WHERE id=?", (23,))
+    connection.execute(
+        "SELECT employee_id FROM time_entries WHERE at>=? AND at<? "
+        "GROUP BY employee_id HAVING (COUNT(*) & 1)=1",
+        ("start", "end"),
+    )
     connection.execute("BEGIN IMMEDIATE")
 
     assert raw.calls == [
         ("SELECT id FROM employees WHERE id=%s", (23,)),
+        (
+            "SELECT employee_id FROM time_entries WHERE at>=%s AND at<%s "
+            "GROUP BY employee_id HAVING (COUNT(*) & 1)=1",
+            ("start", "end"),
+        ),
         ("SELECT pg_advisory_xact_lock(624318209)", ()),
     ]
 
