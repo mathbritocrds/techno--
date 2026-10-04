@@ -32,6 +32,8 @@ TABLES = (
     "cost_analyses",
     "integrations",
     "messages",
+    "employee_requests",
+    "role_permissions",
     "audit_log",
     "notification_channels",
 )

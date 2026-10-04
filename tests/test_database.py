@@ -96,6 +96,8 @@ def test_supabase_schema_has_all_tables_and_blocks_public_api_access():
     }
 
     assert all(f"CREATE TABLE IF NOT EXISTS {table}" in schema for table in expected)
+    assert "username TEXT NOT NULL DEFAULT ''" in schema
+    assert "ux_admin_username" in schema
     assert "minimum_stock DOUBLE PRECISION NOT NULL DEFAULT 0" in schema
     assert "totp_secret TEXT" in schema and "department_id BIGINT" in schema
     assert "ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS task_id BIGINT" in schema

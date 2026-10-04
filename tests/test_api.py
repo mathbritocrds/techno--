@@ -40,24 +40,51 @@ def auth():
 def test_primeiro_cadastro_cria_empresa_e_login():
     assert client.get("/auth/status").json() == {"setup_required": True}
     response = client.post("/auth/register", json={"email": "admin@flux.test", "password": "segredo-de-teste",
-                                                    "company_name": "Flux Ltda", "cnpj": "12345678000199"})
+                                                    "username": "Admin Flux", "company_name": "Flux Ltda",
+                                                    "cnpj": "12345678000199"})
     assert response.status_code == 201 and response.json()["token"]
     headers = {"Authorization": "Bearer " + response.json()["token"]}
     assert client.get("/auth/status").json() == {"setup_required": False}
     assert client.get("/settings/company", headers=headers).json() == {"name": "Flux Ltda", "cnpj": "12345678000199"}
+    assert client.get("/auth/account", headers=headers).json() == {
+        "email": "admin@flux.test", "username": "Admin Flux",
+    }
+    updated = client.put("/auth/account", json={
+        "username": "Admin Flux Atualizado", "email": "admin.novo@flux.test",
+        "current_password": "segredo-de-teste", "new_password": "senha-nova-segura",
+    }, headers=headers)
+    assert updated.status_code == 200
+    renamed_login = client.post("/auth/login", json={
+        "email": "Admin Flux Atualizado", "password": "senha-nova-segura",
+    })
+    assert renamed_login.status_code == 200 and renamed_login.json()["name"] == "Admin Flux Atualizado"
+    restored = client.put("/auth/account", json={
+        "username": "Admin Flux", "email": "admin@flux.test",
+        "current_password": "senha-nova-segura", "new_password": "segredo-de-teste",
+    }, headers=headers)
+    assert restored.status_code == 200
     assert client.post("/auth/register", json={"email": "intruso@flux.test", "password": "segredo-de-teste",
                                                 "company_name": "Outra Ltda"}).status_code == 401
 
 def test_criacao_de_acessos_limitada_a_empresa(auth):
     payload = {"email": "pessoa@flux.test", "password": "outra-senha-segura", "company_name": "Flux Ltda",
-               "cnpj": "12345678000199"}
+               "username": "Pessoa Flux", "cnpj": "12345678000199"}
     assert client.post("/auth/register", json=payload).status_code == 401
     created = client.post("/auth/register", json=payload, headers=auth)
     assert created.status_code == 201 and created.json()["token"] is None
     assert client.post("/auth/register", json=payload, headers=auth).status_code == 409
+    duplicate_username = {**payload, "email": "outra@flux.test"}
+    assert client.post("/auth/register", json=duplicate_username, headers=auth).status_code == 409
     other_company = {**payload, "email": "outra@flux.test", "company_name": "Outra Ltda", "cnpj": ""}
     assert client.post("/auth/register", json=other_company, headers=auth).status_code == 409
     assert client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]}).status_code == 200
+    assert client.post("/auth/login", json={"email": payload["username"], "password": payload["password"]}).json()["name"] == payload["username"]
+    without_company = {
+        "email": "sem-empresa@flux.test", "username": "Sem Empresa",
+        "password": "senha-sem-empresa", "company_name": "",
+    }
+    assert client.post("/auth/register", json=without_company, headers=auth).status_code == 201
+    assert client.get("/settings/company", headers=auth).json()["name"] == "Flux Ltda"
 
 def test_login_legado_com_user(auth):
     response = client.post("/auth/login", json={"user": "admin@flux.test", "password": "segredo-de-teste"})

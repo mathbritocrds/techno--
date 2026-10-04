@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 import psycopg2
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -38,7 +38,7 @@ OVERTIME_RATE = 1.5       # hora extra a 50% (estimativa)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS admins(
-  user TEXT PRIMARY KEY, salt TEXT, hash TEXT, role TEXT NOT NULL DEFAULT 'admin',
+  user TEXT PRIMARY KEY, username TEXT NOT NULL DEFAULT '', salt TEXT, hash TEXT, role TEXT NOT NULL DEFAULT 'admin',
   department_id INTEGER, totp_secret TEXT, totp_enabled INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user TEXT, expires REAL,
     role TEXT NOT NULL DEFAULT 'admin', subject_id INTEGER);
@@ -125,8 +125,18 @@ CREATE TABLE IF NOT EXISTS messages(
     sender_role TEXT NOT NULL CHECK(sender_role IN ('admin','employee')),
     sender_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
     sender_name TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS employee_requests(
+    id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL REFERENCES employees(id),
+    kind TEXT NOT NULL, details TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pendente',
+    attachment_name TEXT DEFAULT '', attachment_mime TEXT DEFAULT '',
+    attachment_content TEXT DEFAULT '', created_at TEXT NOT NULL,
+    reviewed_at TEXT, reviewed_by TEXT DEFAULT '', review_note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS role_permissions(
+    role TEXT NOT NULL, module TEXT NOT NULL, permission TEXT NOT NULL,
+    allowed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(role,module,permission));
 """
 MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
+                            "ALTER TABLE admins ADD COLUMN username TEXT NOT NULL DEFAULT ''",
                             "ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'",
                             "ALTER TABLE sessions ADD COLUMN subject_id INTEGER",
                             "ALTER TABLE employees ADD COLUMN account_email TEXT DEFAULT ''",
@@ -182,6 +192,7 @@ with db() as c:
             except sqlite3.OperationalError: pass
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_nsr ON time_entries(nsr) WHERE nsr IS NOT NULL")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_employee_account_email ON employees(lower(account_email)) WHERE account_email IS NOT NULL AND account_email != ''")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_username ON admins(lower(username)) WHERE username != ''")
 
 app = FastAPI(title="SIGI Gestão API")
 
@@ -228,6 +239,48 @@ class LiveClients:
 
 live_clients = LiveClients()
 
+PERMISSION_ACTIONS = ("view", "create", "edit", "approve", "delete")
+PERMISSION_MODULES = {
+    "tasks": "Quadros", "spaces": "Espaços", "messages": "Mensagens",
+    "timekeeping": "Ponto", "payroll": "Folha", "employees": "Colaboradores",
+    "inventory": "Matéria-prima", "cost": "Custeio", "finance": "Financeiro",
+    "approvals": "Aprovações", "integrations": "Integrações",
+}
+
+def permission_delegable(role, module, permission):
+    if module == "tasks":
+        return permission in ({"view", "approve"} if role == "manager" else {"view"})
+    if module == "spaces":
+        return permission in ({"view", "create", "delete"} if role == "manager" else {"view"})
+    if module == "approvals":
+        return role == "manager" and permission in {"view", "approve"}
+    if module == "messages":
+        return permission == "view"
+    return False
+DEFAULT_PERMISSIONS = {
+    ("manager", "tasks", "view"): True, ("manager", "tasks", "approve"): True,
+    ("manager", "approvals", "view"): True, ("manager", "approvals", "approve"): True,
+    ("manager", "spaces", "view"): True, ("manager", "spaces", "create"): True,
+    ("manager", "spaces", "delete"): True,
+    ("operator", "tasks", "view"): True, ("operator", "spaces", "view"): True,
+}
+
+def request_permission(request):
+    path, method = request.url.path, request.method
+    if path.startswith("/tasks"):
+        if path.endswith("/approval"):
+            return "tasks", "approve"
+        return "tasks", {"GET": "view", "POST": "create", "PATCH": "edit",
+                         "PUT": "edit", "DELETE": "delete"}.get(method)
+    if path.startswith("/space-bookings"):
+        return "spaces", {"GET": "view", "POST": "create", "PATCH": "edit",
+                           "PUT": "edit", "DELETE": "delete"}.get(method)
+    if path.startswith("/messages"):
+        return "messages", "view" if method == "GET" else "unsupported"
+    if path.startswith("/approvals"):
+        return "approvals", "view" if method == "GET" else "approve"
+    return None
+
 @app.middleware("http")
 async def audit_mutations(request, call_next):
     token = request.headers.get("authorization", "")
@@ -239,7 +292,23 @@ async def audit_mutations(request, call_next):
                                 (token_hash, time.time())).fetchone()
             if session:
                 actor, role = session["user"], session["role"]
-    response = await call_next(request)
+    permission = request_permission(request)
+    denied = False
+    if permission and token.startswith("Bearer "):
+        module, action = permission
+        token_hash = hashlib.sha256(token[7:].encode()).hexdigest()
+        with db() as c:
+            session = c.execute('SELECT "user",role,expires FROM sessions WHERE token=?',
+                                (token_hash,)).fetchone()
+            if session and session["expires"] > time.time() and session["role"] in ("manager", "operator"):
+                override = c.execute(
+                    "SELECT allowed FROM role_permissions WHERE role=? AND module=? AND permission=?",
+                    (session["role"], module, action)).fetchone()
+                allowed = bool(override["allowed"]) if override else DEFAULT_PERMISSIONS.get(
+                    (session["role"], module, action), False)
+                denied = not allowed
+    response = (JSONResponse({"detail": "Sua função não tem permissão para esta ação."}, status_code=403)
+                if denied else await call_next(request))
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {
         "/auth/login", "/auth/employee/login", "/auth/register", "/auth/logout",
     }:
@@ -283,10 +352,20 @@ class Login(BaseModel):
 class Registration(BaseModel):
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=8, max_length=128)
-    company_name: str = Field(min_length=2, max_length=160)
+    username: str = Field(default="", max_length=80)
+    company_name: str = Field(default="", max_length=160)
     cnpj: str = Field(default="", pattern=r"^(\d{14})?$")
     role: Literal["manager", "operator"] = "manager"
     department_id: Optional[int] = None
+
+class AccountUpdate(BaseModel):
+    username: str = Field(min_length=1, max_length=80)
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: Optional[str] = Field(default=None, min_length=8, max_length=128)
+
+def account_username(email: str, username: str) -> str:
+    return username.strip() or email.split("@", 1)[0]
 
 def session_user(c, authorization, now):
     if not authorization.startswith("Bearer "):
@@ -308,17 +387,19 @@ def principal_for_token(token: str):
         if not session or session["expires"] <= time.time():
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
         if session["role"] in ("admin", "manager", "operator"):
-            account = c.execute('SELECT role,department_id FROM admins WHERE "user"=?',
+            account = c.execute('SELECT role,department_id,username FROM admins WHERE "user"=?',
                                 (session["user"],)).fetchone()
             if not account or account["role"] != session["role"]:
                 raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
             return {"role": account["role"], "user": session["user"], "employee_id": None,
-                    "department_id": account["department_id"]}
-        employee = c.execute("SELECT id,name FROM employees WHERE id=? AND lower(account_email)=lower(?) AND active=1",
+                    "department_id": account["department_id"],
+                    "name": account_username(session["user"], account["username"])}
+        employee = c.execute("SELECT id,name,department_id FROM employees WHERE id=? AND lower(account_email)=lower(?) AND active=1",
                              (session["subject_id"], session["user"])).fetchone()
         if not employee:
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
-        return {"role": "employee", "user": session["user"], "employee_id": employee["id"], "name": employee["name"]}
+        return {"role": "employee", "user": session["user"], "employee_id": employee["id"],
+                "department_id": employee["department_id"], "name": employee["name"]}
 
 def principal(authorization: str = Header(default="")):
     if not authorization.startswith("Bearer "):
@@ -339,6 +420,13 @@ def auth_status():
 @app.post("/auth/register", status_code=201)
 def register_account(b: Registration, authorization: str = Header(default="")):
     email, now = b.email.strip().lower(), time.time()
+    username = account_username(email, b.username)
+    company_name = b.company_name.strip()
+    if (not username or len(username) > 80 or "@" in username
+            or any(ord(char) < 32 for char in username)):
+        raise HTTPException(422, "Informe um nome de usuário válido (até 80 caracteres, sem @).")
+    if company_name and len(company_name) < 2:
+        raise HTTPException(422, "O nome da empresa deve ter pelo menos 2 caracteres.")
     with db() as c:
         c.execute("BEGIN IMMEDIATE")
         account_exists = bool(c.execute("SELECT 1 FROM admins LIMIT 1").fetchone())
@@ -347,11 +435,15 @@ def register_account(b: Registration, authorization: str = Header(default="")):
             raise HTTPException(401, "Entre como administrador para criar outro acesso.")
         if c.execute('SELECT 1 FROM admins WHERE "user"=?', (email,)).fetchone():
             raise HTTPException(409, "Este e-mail já possui acesso.")
+        if c.execute('SELECT 1 FROM admins WHERE lower(username)=lower(?) AND username!=\'\'',
+                     (username,)).fetchone():
+            raise HTTPException(409, "Este nome de usuário já está em uso.")
         current = settings(c)
-        company_name = current.get("co_name", "").strip()
+        current_company_name = current.get("co_name", "").strip()
         company_cnpj = current.get("co_cnpj", "").strip()
-        if company_name and (company_name.casefold() != b.company_name.strip().casefold()
-                             or company_cnpj != b.cnpj):
+        if current_company_name and company_name and (
+                current_company_name.casefold() != company_name.casefold()
+                or (b.cnpj and company_cnpj != b.cnpj)):
             raise HTTPException(409, "Esta instalação já pertence a outra empresa.")
         role = "admin" if not account_exists else b.role
         department_id = b.department_id if role == "manager" else None
@@ -360,11 +452,11 @@ def register_account(b: Registration, authorization: str = Header(default="")):
         ).fetchone():
             raise HTTPException(404, "Departamento não encontrado.")
         salt = secrets.token_hex(16)
-        c.execute('INSERT INTO admins("user",salt,hash,role,department_id) VALUES(?,?,?,?,?)',
-                  (email, salt, hash_pin(b.password, salt), role, department_id))
-        if not company_name:
+        c.execute('INSERT INTO admins("user",username,salt,hash,role,department_id) VALUES(?,?,?,?,?,?)',
+                  (email, username, salt, hash_pin(b.password, salt), role, department_id))
+        if not account_exists:
             c.execute("INSERT INTO settings(k,v) VALUES('co_name',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
-                      (b.company_name.strip(),))
+                      (company_name,))
             c.execute("INSERT INTO settings(k,v) VALUES('co_cnpj',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                       (b.cnpj,))
         token = None
@@ -372,7 +464,7 @@ def register_account(b: Registration, authorization: str = Header(default="")):
             token = secrets.token_urlsafe(32)
             c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,\'admin\')',
                       (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600))
-    return {"email": email, "token": token, "role": role}
+    return {"email": email, "username": username, "token": token, "role": role}
 
 @app.post("/auth/login")
 def login(b: Login):
@@ -381,7 +473,9 @@ def login(b: Login):
     if n >= 5 and now - t < 300:
         raise HTTPException(429, "Muitas tentativas. Aguarde 5 minutos.")
     with db() as c:
-        a = c.execute('SELECT * FROM admins WHERE "user"=?', (k,)).fetchone()
+        a = c.execute('SELECT * FROM admins WHERE lower("user")=lower(?) OR lower(username)=lower(?) '
+                      'ORDER BY CASE WHEN lower("user")=lower(?) THEN 0 ELSE 1 END LIMIT 1',
+                      (k, k, k)).fetchone()
         if not a or not hmac.compare_digest(hash_pin(b.password, a["salt"]), a["hash"]):
             _fails[k] = ((n if now - t < 300 else 0) + 1, now)
             raise HTTPException(401, "Usuário ou senha incorretos.")
@@ -396,7 +490,45 @@ def login(b: Login):
         c.execute("DELETE FROM sessions WHERE expires<?", (now,))
         c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,?)',
                   (hashlib.sha256(tok.encode()).hexdigest(), k, now + SESSION_HOURS * 3600, a["role"]))
-    return {"token": tok, "user": k, "role": a["role"]}
+    return {"token": tok, "user": a["user"], "name": account_username(a["user"], a["username"]),
+            "role": a["role"]}
+
+@app.get("/auth/account")
+def get_account(who=Depends(principal)):
+    if who["role"] != "admin":
+        raise HTTPException(403, "Somente o administrador pode editar estes dados da conta.")
+    return {"email": who["user"], "username": who["name"]}
+
+@app.put("/auth/account")
+def update_account(b: AccountUpdate, who=Depends(principal)):
+    if who["role"] != "admin":
+        raise HTTPException(403, "Somente o administrador pode editar estes dados da conta.")
+    email, username = b.email.strip().lower(), b.username.strip()
+    if not username or "@" in username or any(ord(char) < 32 for char in username):
+        raise HTTPException(422, "Informe um nome de usuário válido (até 80 caracteres, sem @).")
+    old_email = who["user"]
+    with db() as c:
+        account = c.execute('SELECT salt,hash FROM admins WHERE "user"=? AND role=\'admin\'',
+                            (old_email,)).fetchone()
+        if not account or not hmac.compare_digest(hash_pin(b.current_password, account["salt"]), account["hash"]):
+            raise HTTPException(401, "A senha atual está incorreta.")
+        conflict = c.execute(
+            'SELECT 1 FROM admins WHERE "user"<>? AND '
+            '(lower("user")=lower(?) OR (username!=\'\' AND lower(username)=lower(?)))',
+            (old_email, email, username),
+        ).fetchone()
+        if conflict:
+            raise HTTPException(409, "Este e-mail ou nome de usuário já está em uso.")
+        salt = account["salt"]
+        password_hash = account["hash"]
+        if b.new_password:
+            salt = secrets.token_hex(16)
+            password_hash = hash_pin(b.new_password, salt)
+        c.execute('UPDATE admins SET "user"=?,username=?,salt=?,hash=? WHERE "user"=?',
+                  (email, username, salt, password_hash, old_email))
+        c.execute('UPDATE sessions SET "user"=? WHERE "user"=?', (email, old_email))
+        c.execute("UPDATE space_bookings SET booked_by=? WHERE booked_by=?", (email, old_email))
+    return {"email": email, "username": username}
 
 @app.post("/auth/employee/login")
 def employee_login(b: Login):
@@ -416,6 +548,263 @@ def employee_login(b: Login):
         c.execute('INSERT INTO sessions(token,"user",expires,role,subject_id) VALUES(?,?,?,\'employee\',?)',
                   (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600, e["id"]))
     return {"token": token, "user": email, "role": "employee", "employee_id": e["id"], "name": e["name"]}
+
+class EmployeeRequestIn(BaseModel):
+    kind: Literal["ferias", "folga", "atestado"]
+    details: str = Field(min_length=3, max_length=2000)
+    attachment_name: str = Field(default="", max_length=180)
+    attachment_mime: str = Field(default="", max_length=100)
+    attachment_base64: str = Field(default="", max_length=8_400_000)
+
+class RequestDecision(BaseModel):
+    decision: Literal["aprovado", "recusado"]
+    note: str = Field(default="", max_length=1000)
+
+def employee_principal(who=Depends(principal)):
+    if who["role"] != "employee":
+        raise HTTPException(403, "Este recurso está disponível apenas para funcionários.")
+    return who
+
+@app.get("/employee/summary")
+def employee_summary(who=Depends(employee_principal)):
+    now = utcnow()
+    start, end = day_range(local(now).date())
+    with db() as c:
+        employee = c.execute("SELECT id,name,role,department_id FROM employees WHERE id=? AND active=1",
+                             (who["employee_id"],)).fetchone()
+        entries = rows(c.execute(
+            "SELECT kind,at FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
+            "ORDER BY at,id", (who["employee_id"], start, end)))
+        configured = settings(c)
+    if not employee:
+        raise HTTPException(401, "Conta de funcionário inativa.")
+    worked_seconds = 0
+    open_entry = None
+    for entry in entries:
+        at = datetime.fromisoformat(entry["at"])
+        if entry["kind"] == "entrada":
+            open_entry = at
+        elif open_entry:
+            worked_seconds += max(0, (at - open_entry).total_seconds())
+            open_entry = None
+    shift_seconds = max(0, (now - open_entry).total_seconds()) if open_entry else 0
+    total = worked_seconds + shift_seconds
+    alert_minutes = int(configured.get("clock_break_alert_minutes", 240))
+    daily_target = float(configured.get("daily_hours", DAILY_HOURS))
+    return {
+        "employee": dict(employee),
+        "on_clock": open_entry is not None,
+        "clocked_since": iso(open_entry) if open_entry else None,
+        "worked_minutes": round(total / 60),
+        "bank_minutes": round(total / 60) - round(daily_target * 60),
+        "break_alert": bool(open_entry and shift_seconds >= alert_minutes * 60),
+        "break_alert_minutes": alert_minutes,
+        "last_entry": entries[-1]["at"] if entries else None,
+    }
+
+@app.post("/employee/requests", status_code=201)
+def create_employee_request(b: EmployeeRequestIn, who=Depends(employee_principal)):
+    details = b.details.strip()
+    if len(details) < 3:
+        raise HTTPException(400, "Descreva a solicitação.")
+    attachment_name, attachment_mime, attachment = "", "", ""
+    if b.attachment_base64:
+        if b.kind != "atestado":
+            raise HTTPException(400, "Anexos são aceitos somente em solicitações de atestado.")
+        allowed = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+        if b.attachment_mime not in allowed:
+            raise HTTPException(400, "O anexo deve ser PDF, JPEG, PNG ou WebP.")
+        try:
+            raw = base64.b64decode(b.attachment_base64, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise HTTPException(400, "Arquivo anexado inválido.") from error
+        if not raw or len(raw) > 6 * 1024 * 1024:
+            raise HTTPException(413, "O anexo deve ter no máximo 6 MB.")
+        attachment_name = Path(b.attachment_name).name
+        attachment_mime = b.attachment_mime
+        attachment = base64.b64encode(raw).decode("ascii")
+    if b.kind == "atestado" and not attachment:
+        raise HTTPException(400, "Anexe a foto ou o PDF do atestado.")
+    with db() as c:
+        cur = c.execute(
+            "INSERT INTO employee_requests(employee_id,kind,details,attachment_name,attachment_mime,"
+            "attachment_content,created_at) VALUES(?,?,?,?,?,?,?) RETURNING id",
+            (who["employee_id"], b.kind, details, attachment_name, attachment_mime, attachment, iso(utcnow())))
+        request_id = cur.fetchall()[0]["id"]
+    return {"id": request_id, "status": "pendente"}
+
+@app.get("/employee/requests")
+def list_employee_requests(who=Depends(employee_principal)):
+    with db() as c:
+        return rows(c.execute(
+            "SELECT id,kind,details,status,attachment_name,created_at,reviewed_at,reviewed_by,review_note "
+            "FROM employee_requests WHERE employee_id=? ORDER BY id DESC", (who["employee_id"],)))
+
+@app.get("/employee/timesheet")
+def employee_timesheet(month: Optional[str] = None, who=Depends(employee_principal)):
+    ym = month or local(utcnow()).strftime("%Y-%m")
+    a, b = month_bounds(ym)
+    with db() as c:
+        employee = c.execute("SELECT name FROM employees WHERE id=? AND active=1",
+                             (who["employee_id"],)).fetchone()
+        entries = rows(c.execute(
+            "SELECT kind,at,nsr,hash FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
+            "ORDER BY at,id", (who["employee_id"], a, b)))
+    if not employee:
+        raise HTTPException(401, "Conta de funcionário inativa.")
+    day_hours = defaultdict(float)
+    opened = None
+    for entry in entries:
+        stamp = datetime.fromisoformat(entry["at"])
+        if entry["kind"] == "entrada":
+            opened = stamp
+        elif opened:
+            day_hours[local(opened).date().isoformat()] += (stamp - opened).total_seconds() / 3600
+            opened = None
+    payload = {"employee": employee["name"], "month": ym, "entries": entries,
+               "days": [{"date": day, "hours": round(hours, 2)}
+                        for day, hours in sorted(day_hours.items())],
+               "total_hours": round(sum(day_hours.values()), 2)}
+    payload["integrity_sha256"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+    return payload
+
+@app.get("/employee/timesheet/verify")
+def verify_employee_timesheet(month: str, report_hash: str, who=Depends(employee_principal)):
+    report = employee_timesheet(month, who)
+    return {"valid": hmac.compare_digest(report["integrity_sha256"], report_hash),
+            "current_hash": report["integrity_sha256"], "month": report["month"]}
+
+@app.get("/employee/payroll")
+def employee_payroll(month: Optional[str] = None, who=Depends(employee_principal)):
+    ym = month or local(utcnow()).strftime("%Y-%m")
+    with db() as c:
+        employee = c.execute("SELECT * FROM employees WHERE id=? AND active=1",
+                             (who["employee_id"],)).fetchone()
+        ts = timesheet_data(c, ym).get(who["employee_id"])
+    if not employee:
+        raise HTTPException(401, "Conta de funcionário inativa.")
+    overtime_hours = round(ts["overtime"], 2) if ts else 0.0
+    overtime_pay = round(overtime_hours * (employee["salary"] / 220) * OVERTIME_RATE, 2)
+    gross = employee["salary"] + overtime_pay
+    deduction = inss(gross)
+    return {"month": ym, "name": employee["name"], "role": employee["role"],
+            "base_salary": employee["salary"], "overtime_hours": overtime_hours,
+            "overtime_pay": overtime_pay, "gross": round(gross, 2), "inss": round(deduction, 2),
+            "benefits": employee["benefits"], "net": round(gross - deduction + employee["benefits"], 2)}
+
+@app.get("/employee/tasks")
+def employee_tasks(who=Depends(employee_principal)):
+    with db() as c:
+        employee = c.execute("SELECT name FROM employees WHERE id=? AND active=1",
+                             (who["employee_id"],)).fetchone()
+        if not employee:
+            raise HTTPException(401, "Conta de funcionário inativa.")
+        return rows(c.execute(
+            "SELECT id,title,due,status,progress,priority FROM tasks "
+            "WHERE lower(assignee)=lower(?) ORDER BY CASE WHEN status=2 THEN 1 ELSE 0 END,due,id",
+            (employee["name"],)))
+
+@app.get("/employee/spaces")
+def employee_spaces(start: Optional[str] = None, end: Optional[str] = None,
+                    who=Depends(employee_principal)):
+    conditions, params = [], []
+    if start:
+        conditions.append("b.ends_at>?")
+        params.append(booking_time(start))
+    if end:
+        conditions.append("b.starts_at<?")
+        params.append(booking_time(end))
+    query = ("SELECT b.id,b.space_id,b.title,b.starts_at,b.ends_at,b.booked_by,s.name AS space_name "
+             "FROM space_bookings b JOIN spaces s ON s.id=b.space_id")
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY b.starts_at,s.name"
+    with db() as c:
+        spaces = rows(c.execute("SELECT id,name,kind FROM spaces ORDER BY name"))
+        bookings = rows(c.execute(query, params))
+    return {"spaces": spaces, "bookings": bookings}
+
+@app.get("/employee/requests/{request_id}/attachment")
+def employee_request_attachment(request_id: int, who=Depends(employee_principal)):
+    with db() as c:
+        attachment = c.execute(
+            "SELECT attachment_name,attachment_mime,attachment_content FROM employee_requests "
+            "WHERE id=? AND employee_id=?", (request_id, who["employee_id"])).fetchone()
+    if not attachment or not attachment["attachment_content"]:
+        raise HTTPException(404, "Anexo não encontrado.")
+    try:
+        content = base64.b64decode(attachment["attachment_content"], validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(500, "O anexo armazenado está inválido.") from error
+    return Response(content, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{Path(attachment["attachment_name"]).name}"',
+                             "X-Content-Type-Options": "nosniff"})
+
+@app.get("/approvals/inbox")
+def approvals_inbox(who=Depends(manager_or_admin)):
+    if who["role"] not in ("admin", "manager"):
+        raise HTTPException(403, "Somente administradores e gestores podem consultar aprovações.")
+    with db() as c:
+        if who["role"] == "admin":
+            tasks = rows(c.execute(
+                "SELECT id,title,assignee,due,department_id,approval FROM tasks "
+                "WHERE approval='pendente' ORDER BY due,id"))
+            requests = rows(c.execute(
+                "SELECT r.id,r.employee_id,e.name AS employee_name,e.department_id,r.kind,r.details,"
+                "r.attachment_name,r.created_at FROM employee_requests r JOIN employees e ON e.id=r.employee_id "
+                "WHERE r.status='pendente' ORDER BY r.id"))
+        else:
+            tasks = rows(c.execute(
+                "SELECT id,title,assignee,due,department_id,approval FROM tasks "
+                "WHERE approval='pendente' AND (department_id=? OR department_id IS NULL) ORDER BY due,id",
+                (who["department_id"],)))
+            requests = rows(c.execute(
+                "SELECT r.id,r.employee_id,e.name AS employee_name,e.department_id,r.kind,r.details,"
+                "'' AS attachment_name,r.created_at FROM employee_requests r JOIN employees e ON e.id=r.employee_id "
+                "WHERE r.status='pendente' AND r.kind!='atestado' AND e.department_id=? ORDER BY r.id",
+                (who["department_id"],)))
+    return {"tasks": tasks, "requests": requests}
+
+@app.get("/approvals/employee-requests/{request_id}/attachment")
+def approval_request_attachment(request_id: int, who=Depends(admin_context)):
+    with db() as c:
+        attachment = c.execute(
+            "SELECT attachment_name,attachment_content FROM employee_requests WHERE id=? AND kind='atestado'",
+            (request_id,)).fetchone()
+    if not attachment or not attachment["attachment_content"]:
+        raise HTTPException(404, "Anexo não encontrado.")
+    try:
+        content = base64.b64decode(attachment["attachment_content"], validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(500, "O anexo armazenado está inválido.") from error
+    return Response(content, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{Path(attachment["attachment_name"]).name}"',
+                             "X-Content-Type-Options": "nosniff"})
+
+@app.post("/approvals/employee-requests/{request_id}")
+def decide_employee_request(request_id: int, decision: RequestDecision,
+                            who=Depends(manager_or_admin)):
+    if who["role"] not in ("admin", "manager"):
+        raise HTTPException(403, "Somente administradores e gestores podem decidir solicitações.")
+    with db() as c:
+        request = c.execute(
+            "SELECT r.kind,e.department_id FROM employee_requests r "
+            "JOIN employees e ON e.id=r.employee_id WHERE r.id=? AND r.status='pendente'",
+            (request_id,)).fetchone()
+        if not request:
+            raise HTTPException(404, "Solicitação pendente não encontrada.")
+        if who["role"] == "manager":
+            if request["kind"] == "atestado":
+                raise HTTPException(403, "Atestados são restritos à administração/RH.")
+            if request["department_id"] != who["department_id"]:
+                raise HTTPException(404, "Solicitação não encontrada.")
+        c.execute(
+            "UPDATE employee_requests SET status=?,reviewed_at=?,reviewed_by=?,review_note=? "
+            "WHERE id=? AND status='pendente'",
+            (decision.decision, iso(utcnow()), who["user"], decision.note.strip(), request_id))
+    return {"id": request_id, "status": decision.decision}
 
 @app.post("/auth/logout")
 def logout(authorization: str = Header(default="")):
@@ -493,6 +882,159 @@ def list_audit(limit: int = 100):
     with db() as c:
         return rows(c.execute("SELECT at,actor,role,action,resource,status,ip FROM audit_log "
                               "ORDER BY id DESC LIMIT ?", (limit,)))
+
+@app.get("/admin/permissions", dependencies=[Depends(admin)])
+def get_permission_matrix():
+    with db() as c:
+        saved = {(row["role"], row["module"], row["permission"]): bool(row["allowed"])
+                 for row in c.execute("SELECT role,module,permission,allowed FROM role_permissions")}
+    return [{
+        "role": role, "module": module, "module_name": name, "permission": permission,
+        "allowed": saved.get((role, module, permission),
+                             DEFAULT_PERMISSIONS.get((role, module, permission), False)),
+        "delegable": permission_delegable(role, module, permission),
+    } for role in ("manager", "operator") for module, name in PERMISSION_MODULES.items()
+      for permission in PERMISSION_ACTIONS]
+
+class PermissionItem(BaseModel):
+    role: Literal["manager", "operator"]
+    module: str
+    permission: Literal["view", "create", "edit", "approve", "delete"]
+    allowed: bool
+
+class PermissionMatrix(BaseModel):
+    permissions: list[PermissionItem] = Field(max_length=400)
+
+@app.put("/admin/permissions", dependencies=[Depends(admin)])
+def save_permission_matrix(b: PermissionMatrix):
+    seen = set()
+    with db() as c:
+        for item in b.permissions:
+            if item.module not in PERMISSION_MODULES:
+                raise HTTPException(400, "Módulo desconhecido na matriz de permissões.")
+            key = (item.role, item.module, item.permission)
+            if key in seen:
+                raise HTTPException(400, "A matriz contém permissões duplicadas.")
+            seen.add(key)
+        c.execute("DELETE FROM role_permissions")
+        for item in b.permissions:
+            c.execute(
+                "INSERT INTO role_permissions(role,module,permission,allowed) VALUES(?,?,?,?)",
+                (item.role, item.module, item.permission, int(item.allowed)))
+    return {"saved": len(b.permissions)}
+
+def global_operational_settings():
+    with db() as c:
+        values = settings(c)
+    return {
+        "clock_gps_accuracy_m": float(values.get("clock_gps_accuracy_m", MAX_GPS_ERROR_M)),
+        "clock_max_spread_m": float(values.get("clock_max_spread_m", MAX_SPREAD_M)),
+        "clock_break_alert_minutes": int(values.get("clock_break_alert_minutes", 240)),
+        "daily_hours": float(values.get("daily_hours", DAILY_HOURS)),
+        "budget_limit": float(values.get("budget_limit", 0)),
+    }
+
+class OperationalSettings(BaseModel):
+    clock_gps_accuracy_m: float = Field(ge=5, le=100)
+    clock_max_spread_m: float = Field(ge=10, le=250)
+    clock_break_alert_minutes: int = Field(ge=60, le=600)
+    daily_hours: float = Field(gt=0, le=16)
+    budget_limit: float = Field(ge=0, le=1_000_000_000)
+
+@app.get("/admin/operational-settings", dependencies=[Depends(admin)])
+def get_operational_settings():
+    return global_operational_settings()
+
+@app.put("/admin/operational-settings", dependencies=[Depends(admin)])
+def save_operational_settings(b: OperationalSettings):
+    put_settings(b.model_dump())
+    return b.model_dump()
+
+@app.get("/admin/operations")
+def admin_operations(month: Optional[str] = None, who=Depends(admin_context)):
+    if who["role"] != "admin":
+        raise HTTPException(403, "Somente administradores podem consultar indicadores consolidados de RH.")
+    ym = month or local(utcnow()).strftime("%Y-%m")
+    month_bounds(ym)
+    year, month_number = map(int, ym.split("-"))
+    month_start = date(year, month_number, 1)
+    next_month = date(year + (month_number == 12), month_number % 12 + 1, 1)
+    with db() as c:
+        employees = rows(c.execute(
+            "SELECT e.id,e.salary,e.benefits,e.department_id,d.name AS department FROM employees e "
+            "LEFT JOIN departments d ON d.id=e.department_id WHERE e.active=1"))
+        entries = rows(c.execute(
+            "SELECT employee_id,kind,at FROM time_entries WHERE accepted=1 "
+            "AND at>=? AND at<? ORDER BY employee_id,at",
+            month_bounds(ym)))
+        tasks = rows(c.execute(
+            "SELECT department_id,status,COUNT(*) AS total FROM tasks GROUP BY department_id,status"))
+        required_entries = c.execute(
+            "SELECT COUNT(DISTINCT employee_id) FROM time_entries WHERE accepted=1 AND at>=? AND at<?",
+            month_bounds(ym)).fetchone()[0]
+        paid_expenses = c.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM transactions WHERE kind='pagar' AND paid=1 AND due>=? AND due<?",
+            (month_start.isoformat(), next_month.isoformat())).fetchone()[0]
+    daily_hours = float(global_operational_settings()["daily_hours"])
+    by_employee, present_days = {}, set()
+    for entry in entries:
+        employee_id = entry["employee_id"]
+        record = by_employee.setdefault(employee_id, {"days": defaultdict(float), "open": None})
+        stamp = datetime.fromisoformat(entry["at"])
+        if entry["kind"] == "entrada":
+            record["open"] = stamp
+            present_days.add((employee_id, local(stamp).date().isoformat()))
+        elif record["open"]:
+            record["days"][local(record["open"]).date().isoformat()] += (
+                stamp - record["open"]).total_seconds() / 3600
+            record["open"] = None
+    departments = {}
+    payroll_cost = 0.0
+    for employee in employees:
+        key = employee["department_id"]
+        group = departments.setdefault(key, {
+            "department": employee["department"] or "Sem departamento",
+            "employees": 0, "overtime_hours": 0.0, "overtime_cost": 0.0,
+            "present_employee_days": 0,
+        })
+        group["employees"] += 1
+        attendance = by_employee.get(employee["id"], {"days": {}})
+        overtime = sum(max(0, hours - daily_hours) for hours in attendance["days"].values())
+        group["overtime_hours"] += overtime
+        group["overtime_cost"] += overtime * (employee["salary"] / 220) * OVERTIME_RATE
+        gross = employee["salary"] + overtime * (employee["salary"] / 220) * OVERTIME_RATE
+        payroll_cost += gross * (1 + EMPLOYER_CHARGES) + employee["benefits"]
+        group["present_employee_days"] += sum(
+            1 for eid, _ in present_days if eid == employee["id"])
+    task_metrics = {}
+    for task in tasks:
+        group = task_metrics.setdefault(task["department_id"], {"completed": 0, "total": 0})
+        group["total"] += task["total"]
+        if task["status"] == 2:
+            group["completed"] += task["total"]
+    days_in_month = (next_month - month_start).days
+    current_month = local(utcnow()).date()
+    counted_days = min(days_in_month, current_month.day) if (year, month_number) == (
+        current_month.year, current_month.month) else days_in_month
+    expected_workdays = sum(
+        1 for day_number in range(1, counted_days + 1)
+        if date(year, month_number, day_number).weekday() < 5)
+    for department_id, group in departments.items():
+        group["overtime_hours"] = round(group["overtime_hours"], 2)
+        group["overtime_cost"] = round(group["overtime_cost"], 2)
+        metrics = task_metrics.get(department_id, {"completed": 0, "total": 0})
+        group["completed_tasks"] = metrics["completed"]
+        group["task_completion_pct"] = round(
+            metrics["completed"] * 100 / metrics["total"], 1) if metrics["total"] else 0
+        expected = group["employees"] * expected_workdays
+        group["absenteeism_pct"] = round(
+            max(0, expected - group["present_employee_days"]) * 100 / expected, 1) if expected else 0
+    return {"month": ym, "departments": list(departments.values()),
+            "employees_with_attendance": required_entries, "daily_hours_target": daily_hours,
+            "expected_workdays": expected_workdays,
+            "budget_used": round(payroll_cost + paid_expenses, 2),
+            "budget_limit": global_operational_settings()["budget_limit"],
+            "absenteeism_basis": "Estimativa por dias úteis até hoje no mês corrente; não desconta feriados ou escalas individuais."}
 
 @app.get("/search", dependencies=[Depends(manager_or_admin)])
 def global_search(q: str = "", who=Depends(manager_or_admin)):
@@ -712,6 +1254,7 @@ def send_message(b: MessageIn, who: dict = Depends(principal)):
 # ---------- Ponto: espelho de horas ----------
 def timesheet_data(c, ym):
     a, b = month_bounds(ym)
+    daily_hours = float(settings(c).get("daily_hours", DAILY_HOURS))
     ents = rows(c.execute("SELECT employee_id,kind,at FROM time_entries WHERE accepted=1 AND at>=? AND at<? "
                           "ORDER BY employee_id, at", (a, b)))
     out = {}
@@ -725,7 +1268,7 @@ def timesheet_data(c, ym):
             rec["open"] = None
     for rec in out.values():
         rec["total"] = sum(rec["days"].values())
-        rec["overtime"] = sum(max(0, h - DAILY_HOURS) for h in rec["days"].values())
+        rec["overtime"] = sum(max(0, h - daily_hours) for h in rec["days"].values())
     return out
 
 @app.get("/timesheet", dependencies=[Depends(admin)])
@@ -1571,8 +2114,8 @@ def list_space_bookings(start: Optional[str] = None, end: Optional[str] = None):
 
 @app.post("/space-bookings", dependencies=[Depends(principal)], status_code=201)
 def add_space_booking(booking: BookingIn, who=Depends(principal)):
-    if who["role"] not in ("admin", "manager"):
-        raise HTTPException(403, "Somente gestores podem agendar espaços.")
+    if who["role"] not in ("admin", "manager", "employee"):
+        raise HTTPException(403, "Sua função não pode agendar espaços.")
     title = booking.title.strip()
     start, end = booking_time(booking.starts_at), booking_time(booking.ends_at)
     if not title or start >= end:
@@ -1581,6 +2124,8 @@ def add_space_booking(booking: BookingIn, who=Depends(principal)):
     if who["role"] == "manager":
         if who["department_id"] is None:
             raise HTTPException(403, "Vincule sua conta a um departamento antes de agendar.")
+        department_id = who["department_id"]
+    elif who["role"] == "employee":
         department_id = who["department_id"]
     with db() as c:
         c.execute("BEGIN IMMEDIATE")
@@ -1601,8 +2146,8 @@ def add_space_booking(booking: BookingIn, who=Depends(principal)):
 
 @app.delete("/space-bookings/{booking_id}")
 def delete_space_booking(booking_id: int, who=Depends(principal)):
-    if who["role"] not in ("admin", "manager"):
-        raise HTTPException(403, "Somente gestores podem cancelar reservas.")
+    if who["role"] not in ("admin", "manager", "employee"):
+        raise HTTPException(403, "Sua função não pode cancelar reservas.")
     with db() as c:
         booking = c.execute("SELECT booked_by,department_id FROM space_bookings WHERE id=?",
                             (booking_id,)).fetchone()
@@ -1611,6 +2156,8 @@ def delete_space_booking(booking_id: int, who=Depends(principal)):
         if who["role"] == "manager" and (booking["booked_by"] != who["user"] or
                                            booking["department_id"] != who["department_id"]):
             raise HTTPException(403, "Você só pode cancelar reservas do seu departamento feitas por você.")
+        if who["role"] == "employee" and booking["booked_by"] != who["user"]:
+            raise HTTPException(403, "Você só pode cancelar suas próprias reservas.")
         cur = c.execute("DELETE FROM space_bookings WHERE id=?", (booking_id,))
         if not cur.rowcount:
             raise HTTPException(404, "Agendamento não encontrado.")
@@ -1861,7 +2408,8 @@ def clock_live(b: Live, request: Request):
         w = workplace_of(configured)
     if not w: raise HTTPException(409, "Local de trabalho não configurado.")
     d = haversine(w["lat"], w["lng"], b.lat, b.lng)
-    gps_ok = b.accuracy_m <= MAX_GPS_ERROR_M
+    gps_limit = float(configured.get("clock_gps_accuracy_m", MAX_GPS_ERROR_M))
+    gps_ok = b.accuracy_m <= gps_limit
     return {"distance_m": round(d), "radius_m": round(w["radius_m"]), "accuracy_m": round(b.accuracy_m),
             "gps_ok": gps_ok, "inside": gps_ok and d <= w["radius_m"]}
 
@@ -1871,6 +2419,11 @@ class Sample(BaseModel):
 
 class Clock(BaseModel):
     employee_id: int; pin: str
+    consent: bool = False
+    samples: list[Sample] = Field(min_length=1, max_length=20)
+    task_id: Optional[int] = None
+
+class EmployeeClock(BaseModel):
     consent: bool = False
     samples: list[Sample] = Field(min_length=1, max_length=20)
     task_id: Optional[int] = None
@@ -1887,26 +2440,31 @@ def clock_tasks(employee_id: int, pin: str, request: Request):
 def entry_hash(prev, nsr, cpf, at, eid, kind, lat, lng):
     return hashlib.sha256(f"{prev}|{nsr}|{cpf}|{at}|{eid}|{kind}|{lat:.6f}|{lng:.6f}".encode()).hexdigest()
 
-@app.post("/clock")
-def clock(b: Clock, request: Request, background: BackgroundTasks):
+def record_clock(b: Clock, request: Request, background: BackgroundTasks,
+                 employee_id: Optional[int] = None):
     if not b.consent:
         raise HTTPException(400, "É preciso autorizar o uso da localização para bater ponto.")
     now = utcnow(); now_ms = now.timestamp() * 1000
     with db() as c:
-        e = check_employee(c, b.employee_id, b.pin)
+        e = (check_employee(c, b.employee_id, b.pin) if employee_id is None else
+             c.execute("SELECT * FROM employees WHERE id=? AND active=1", (employee_id,)).fetchone())
+        if not e:
+            raise HTTPException(401, "Conta de funcionário inativa.")
         s = settings(c); w = workplace_of(s)
         verify_clock_ip(request.client.host if request.client else "", s)
         if not w: raise HTTPException(409, "Local de trabalho não configurado.")
         best = min(b.samples, key=lambda x: x.accuracy_m)
         dist = haversine(w["lat"], w["lng"], best.lat, best.lng)
         spread = max(haversine(p.lat, p.lng, q.lat, q.lng) for p in b.samples for q in b.samples)
+        gps_accuracy_limit = float(s.get("clock_gps_accuracy_m", MAX_GPS_ERROR_M))
+        spread_limit = float(s.get("clock_max_spread_m", MAX_SPREAD_M))
 
         reason = ""
         if any(x.ts_ms and abs(now_ms - x.ts_ms) > 120_000 for x in b.samples):
             reason = "A hora do aparelho parece incorreta ou a localização é antiga. Ajuste o relógio e tente de novo."
-        elif best.accuracy_m > MAX_GPS_ERROR_M:
+        elif best.accuracy_m > gps_accuracy_limit:
             reason = f"Sinal de GPS fraco (±{best.accuracy_m:.0f} m). Vá para um local aberto."
-        elif spread > MAX_SPREAD_M:
+        elif spread > spread_limit:
             reason = "Localização instável. Fique parado em local aberto e tente de novo."
         elif dist > w["radius_m"]:
             reason = f"Você está a {dist:.0f} m da sede (máximo {w['radius_m']:.0f} m)."
@@ -1959,6 +2517,17 @@ def clock(b: Clock, request: Request, background: BackgroundTasks):
                             "trabalhador": {"nome": e["name"], "cpf": e["cpf"]},
                             "nsr": nsr, "tipo": kind, "data_hora": at, "fuso": f"UTC{TZ_OFFSET:+g}",
                             "hash_sha256": h}}
+
+@app.post("/clock")
+def clock(b: Clock, request: Request, background: BackgroundTasks):
+    return record_clock(b, request, background)
+
+@app.post("/employee/clock")
+def employee_clock(b: EmployeeClock, request: Request, background: BackgroundTasks,
+                   who=Depends(employee_principal)):
+    clock_input = Clock(employee_id=who["employee_id"], pin="", consent=b.consent,
+                        samples=b.samples, task_id=b.task_id)
+    return record_clock(clock_input, request, background, employee_id=who["employee_id"])
 
 @app.get("/time-entries", dependencies=[Depends(admin)])
 def time_entries(employee_id: Optional[int] = None, limit: int = 100):

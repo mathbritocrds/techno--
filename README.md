@@ -10,7 +10,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-Na primeira execução, use **Criar conta da empresa** na tela de login para registrar o e-mail, a senha e os dados da empresa. Para instalações já configuradas, o atalho de login solicita a autenticação de um administrador para autorizar novos acessos da mesma empresa. Senhas são armazenadas com hash; não há credenciais padrão para instalações novas.
+Na primeira execução, use **Criar conta da empresa** na tela de login para cadastrar o nome de usuário do administrador, e-mail e senha. O nome da empresa e o CNPJ são opcionais. O administrador pode editar o nome de usuário, e-mail e senha em **Segurança**, confirmando a senha atual; o nome de usuário ou e-mail pode ser usado para entrar. Para instalações já configuradas, o atalho de login solicita a autenticação de um administrador para autorizar novos acessos da mesma empresa. Senhas são armazenadas com hash; não há credenciais padrão para instalações novas.
 
 ## O que foi acrescentado (SIGI)
 
@@ -24,7 +24,7 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 - **Custeio mensal por setor**: consolida despesas pagas, em aberto e folha por competência.
 - **Exportação financeira em CSV** para contas a pagar e receber, com neutralização de fórmulas em campos de texto.
 - **Funcionários**: cadastro na tela de Folha e exportação autenticada da lista em CSV.
-- **Contas por e-mail**: primeiro usuário configura a empresa; somente um administrador autenticado pode criar acessos adicionais na mesma instalação.
+- **Contas de usuário**: o administrador pode entrar com nome de usuário ou e-mail; somente um administrador autenticado pode criar acessos adicionais na mesma instalação.
 - **Acesso por função**: Administrador tem controle total; Gestor consulta quadros e decide aprovações; Operador tem acesso de leitura aos quadros. Administradores podem alterar as funções em Segurança.
 - **Gestão de tarefas**: arraste cards entre etapas no Kanban ou altere-as na tabela; cada card tem checklist com progresso, tags, anexos (PDF/JPEG/PNG/WebP, até 6 MB) e histórico de alterações. Gestores veem tarefas do próprio departamento e tarefas compartilhadas sem departamento.
 - **Custeio por tarefa**: associe a tarefa em andamento à entrada e à saída do ponto para apurar horas e custo de mão de obra. A taxa horária é congelada no registro, usando salário mensal dividido por 220 horas. Insumos podem ser vinculados ao card e são baixados uma única vez quando ele sai de “A fazer”; falta de saldo impede a movimentação.
