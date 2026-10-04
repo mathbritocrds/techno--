@@ -1062,7 +1062,8 @@ def dashboard():
     with db() as c:
         a, z = day_range(today)
         present = c.execute("""SELECT COUNT(*) FROM (SELECT employee_id FROM time_entries
-            WHERE accepted=1 AND at>=? AND at<? GROUP BY employee_id HAVING COUNT(*)%2=1)""", (a, z)).fetchone()[0]
+            WHERE accepted=1 AND at>=? AND at<? GROUP BY employee_id HAVING COUNT(*)%2=1) AS present_employees""",
+                            (a, z)).fetchone()[0]
         tasks = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM tasks GROUP BY status")}
         prods = [with_costs(p) for p in rows(c.execute("SELECT * FROM products"))]
         emps = rows(c.execute("SELECT * FROM employees WHERE active=1"))

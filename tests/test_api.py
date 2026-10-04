@@ -284,3 +284,22 @@ def test_materia_departamentos_espacos_e_dre(auth):
     client.delete(f"/departments/{did}", headers=auth)
     client.delete(f"/spaces/{sid}", headers=auth)
     client.delete(f"/integrations/{iid}", headers=auth)
+
+
+def test_dashboard_conta_funcionarios_com_ponto_aberto(auth):
+    before = client.get("/dashboard", headers=auth).json()["present_now"]
+    employee_id = client.post(
+        "/employees",
+        json={"name": "Presente", "salary": 0, "pin": "5678"},
+        headers=auth,
+    ).json()["id"]
+    with main.db() as c:
+        c.execute(
+            "INSERT INTO time_entries(employee_id,kind,at,accepted) VALUES(?,?,?,1)",
+            (employee_id, "entrada", main.iso(main.utcnow())),
+        )
+
+    response = client.get("/dashboard", headers=auth)
+
+    assert response.status_code == 200
+    assert response.json()["present_now"] == before + 1
