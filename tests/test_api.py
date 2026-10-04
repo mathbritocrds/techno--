@@ -86,6 +86,11 @@ def test_front_end_e_servido():
     assert "atualização automática a cada 30 s" in page and "Estoque mínimo" in page
     assert "Busca global (Ctrl+K)" in page and "/events" in page
     assert "Autenticador de dois fatores" in page and "/service-worker.js" in page
+    assert "dragOverColumn" in page and "taskDialogContent" in page
+    assert "checklist" in page and "Histórico" in page and "Exportar CSV / Excel" in page
+    assert "openQuickTaskFromSearch" in page and "Filtros salvos" in page
+    assert "Agendar recurso" in page and "clockIpRanges" in page
+    assert "Ao chegar a 100%" in page and "custo real acima do teto" in page
     assert "/ai/fill-mask" not in page
     assert "Resumir com IA" not in page and "finance/department-summary" not in page
 
@@ -437,3 +442,143 @@ def test_alertas_criticos_disparam_notificacoes(auth, monkeypatch):
     assert task.status_code == material.status_code == 201
     assert any("Ordem crítica" in message for message in delivered)
     assert any("Peça crítica" in message for message in delivered)
+
+def test_quadro_checklist_tags_anexos_e_timeline(auth):
+    task_id = client.post("/tasks", json={"title": "Protótipo com documentação"}, headers=auth).json()["id"]
+    checklist_id = client.post(f"/tasks/{task_id}/checklist", json={"title": "Validar medidas"},
+                               headers=auth).json()["id"]
+    assert client.get(f"/tasks/{task_id}", headers=auth).json()["checklist"][0]["done"] == 0
+    assert client.patch(f"/tasks/{task_id}/checklist/{checklist_id}", json={"done": True},
+                        headers=auth).status_code == 200
+    tags = client.put(f"/tasks/{task_id}/tags", json={"tags": ["protótipo", "urgente", "protótipo"]},
+                      headers=auth)
+    assert tags.json()["tags"] == ["protótipo", "urgente"]
+    payload = {"name": "especificacao.pdf", "mime": "application/pdf",
+               "content_base64": base64.b64encode(b"%PDF-1.4\nSIGI").decode()}
+    attachment_id = client.post(f"/tasks/{task_id}/attachments", json=payload,
+                                headers=auth).json()["id"]
+    downloaded = client.get(f"/tasks/{task_id}/attachments/{attachment_id}", headers=auth)
+    assert downloaded.content == b"%PDF-1.4\nSIGI"
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
+    rejected = client.post(f"/tasks/{task_id}/attachments",
+                           json={**payload, "content_base64": base64.b64encode(b"not a pdf").decode()},
+                           headers=auth)
+    assert rejected.status_code == 400
+    detail = client.get(f"/tasks/{task_id}", headers=auth).json()
+    assert detail["progress"] == 100
+    assert detail["tags"] == ["protótipo", "urgente"]
+    assert detail["attachments"][0]["name"] == "especificacao.pdf"
+    assert any("validar medidas" in event["details"].lower() for event in detail["history"])
+    export = client.get("/tasks/export.csv", headers=auth)
+    assert export.status_code == 200 and "Protótipo com documentação" in export.text
+    filtered_export = client.get("/tasks/export.csv", params={"q": "sem correspondência"}, headers=auth)
+    assert filtered_export.status_code == 200 and "Protótipo com documentação" not in filtered_export.text
+
+def test_tarefa_desconta_insumos_e_compara_custo_real(auth):
+    employee_id = client.post("/employees", json={"name": "Apontador de custo", "salary": 2200,
+                                                  "pin": "2468"}, headers=auth).json()["id"]
+    material_id = client.post("/materials", json={"name": "Chapa tarefa", "unit": "kg", "stock": 10,
+                                                  "unit_cost": 5}, headers=auth).json()["id"]
+    task_id = client.post("/tasks", json={"title": "Projeto custo", "assignee": "Apontador de custo",
+                                          "cost_ceiling": 25}, headers=auth).json()["id"]
+    client.post(f"/tasks/{task_id}/materials", json={"material_id": material_id, "quantity": 2},
+                headers=auth)
+    client.post("/automations", json={"name": "Avisar excesso",
+                                      "trigger": "cost_over_ceiling_notify"}, headers=auth)
+    with main.db() as c:
+        for kind, timestamp in (("entrada", "2026-10-01T09:00:00+00:00"),
+                                 ("saida", "2026-10-01T11:00:00+00:00")):
+            c.execute("INSERT INTO time_entries(employee_id,kind,at,accepted,task_id,labor_rate) "
+                      "VALUES(?,?,?,1,?,10)", (employee_id, kind, timestamp, task_id))
+    assert client.patch(f"/tasks/{task_id}/status/1", headers=auth).status_code == 200
+    assert client.patch(f"/tasks/{task_id}/status/1", headers=auth).status_code == 200
+    stock = next(item for item in client.get("/materials", headers=auth).json()
+                 if item["id"] == material_id)["stock"]
+    costs = client.get(f"/tasks/{task_id}/cost", headers=auth).json()
+    assert stock == 8
+    assert costs["labor_hours"] == 2 and costs["labor_cost"] == 20
+    assert costs["material_cost"] == 10 and costs["actual_cost"] == 30
+    assert costs["cost_ceiling"] == 25
+    with main.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM automation_runs WHERE task_id=?", (task_id,)).fetchone()[0] == 1
+    low_id = client.post("/materials", json={"name": "Estoque concorrente", "stock": 3,
+                                              "unit_cost": 2}, headers=auth).json()["id"]
+    blocked_task = client.post("/tasks", json={"title": "Sem estoque"}, headers=auth).json()["id"]
+    assert client.post(f"/tasks/{blocked_task}/materials",
+                       json={"material_id": low_id, "quantity": 2}, headers=auth).status_code == 201
+    client.put(f"/materials/{low_id}", json={"name": "Estoque concorrente", "unit": "un",
+                "stock": 1, "unit_cost": 2, "minimum_stock": 0}, headers=auth)
+    assert client.patch(f"/tasks/{blocked_task}/status/1", headers=auth).status_code == 409
+    assert next(task for task in client.get("/tasks", headers=auth).json()
+                if task["id"] == blocked_task)["status"] == 0
+
+def test_automacao_checklist_solicita_aprovacao(auth):
+    rule_id = client.post("/automations", json={"name": "Aprovar entregas",
+                                                "trigger": "progress_complete_pending"},
+                          headers=auth).json()["id"]
+    task_id = client.post("/tasks", json={"title": "Tarefa automática",
+                                          "approval": "aprovado"}, headers=auth).json()["id"]
+    item_id = client.post(f"/tasks/{task_id}/checklist", json={"title": "Entrega final"},
+                          headers=auth).json()["id"]
+    response = client.patch(f"/tasks/{task_id}/checklist/{item_id}", json={"done": True},
+                            headers=auth)
+    detail = client.get(f"/tasks/{task_id}", headers=auth).json()
+    assert response.status_code == 200
+    assert detail["progress"] == 100 and detail["approval"] == "pendente"
+    assert any(entry["actor"] == "Automação" for entry in detail["history"])
+    client.delete(f"/automations/{rule_id}", headers=auth)
+
+def test_agenda_compartilhada_evitar_conflitos_e_limitar_setor(auth):
+    department_id = client.post("/departments", json={"name": "Agenda Produção"}, headers=auth).json()["id"]
+    space_id = client.post("/spaces", json={"name": "Bancada CNC"}, headers=auth).json()["id"]
+    created = client.post("/auth/register", json={"email": "agenda-manager@flux.test",
+                             "password": "senha-agenda-segura", "company_name": "Flux Ltda",
+                             "cnpj": "12345678000199", "role": "manager",
+                             "department_id": department_id}, headers=auth)
+    assert created.status_code == 201
+    token = client.post("/auth/login", json={"email": "agenda-manager@flux.test",
+                             "password": "senha-agenda-segura"}).json()["token"]
+    manager = {"Authorization": "Bearer " + token}
+    own_task = client.post("/tasks", json={"title": "Tarefa do setor", "department_id": department_id},
+                           headers=auth).json()["id"]
+    other_department = client.post("/departments", json={"name": "Agenda Financeiro"},
+                                   headers=auth).json()["id"]
+    foreign_task = client.post("/tasks", json={"title": "Tarefa confidencial",
+                                               "department_id": other_department}, headers=auth).json()["id"]
+    visible_tasks = client.get("/tasks", headers=manager).json()
+    assert any(task["id"] == own_task for task in visible_tasks)
+    assert all(task["id"] != foreign_task for task in visible_tasks)
+    assert client.post(f"/tasks/{foreign_task}/approval", json={"decision": "aprovado"},
+                       headers=manager).status_code == 404
+    booking = {"space_id": space_id, "title": "Usinagem lote 42",
+               "starts_at": "2026-10-09T10:00:00-03:00", "ends_at": "2026-10-09T11:00:00-03:00",
+               "department_id": 999999}
+    response = client.post("/space-bookings", json=booking, headers=manager)
+    assert response.status_code == 201
+    rows = client.get("/space-bookings?start=2026-10-09T00:00:00Z&end=2026-10-10T00:00:00Z",
+                      headers=manager).json()
+    assert rows[0]["department_id"] == department_id
+    assert rows[0]["department_name"] == "Agenda Produção"
+    assert client.post("/space-bookings", json={**booking, "starts_at": "2026-10-09T10:30:00-03:00",
+                       "ends_at": "2026-10-09T11:30:00-03:00"}, headers=manager).status_code == 409
+    assert client.get("/spaces", headers=manager).status_code == 200
+    assert client.delete(f"/space-bookings/{response.json()['id']}", headers=manager).status_code == 200
+    assert client.get("/space-bookings").status_code == 401
+
+def test_restricao_opcional_de_ip_no_ponto(auth, ana):
+    assert client.put("/settings/clock-ip", json={"ranges": ["192.168.1.0/24"]},
+                      headers=auth).status_code == 200
+    assert bater(ana).status_code == 403
+    invalid = client.put("/settings/clock-ip", json={"ranges": ["isso-nao-e-cidr"]},
+                         headers=auth)
+    assert invalid.status_code == 400
+    assert client.put("/settings/clock-ip", json={"ranges": []}, headers=auth).json()["ranges"] == []
+
+def test_tarefa_em_andamento_aparece_no_seletor_de_ponto(auth):
+    employee_id = client.post("/employees", json={"name": "Tarefa no ponto", "salary": 1000,
+                                                  "pin": "7654"}, headers=auth).json()["id"]
+    task_id = client.post("/tasks", json={"title": "Montagem atribuída",
+                                          "assignee": "Tarefa no ponto"}, headers=auth).json()["id"]
+    client.patch(f"/tasks/{task_id}/status/1", headers=auth)
+    tasks = client.get(f"/clock/tasks?employee_id={employee_id}&pin=7654").json()
+    assert any(task["id"] == task_id for task in tasks)

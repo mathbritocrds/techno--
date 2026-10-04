@@ -26,6 +26,13 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 - **Funcionários**: cadastro na tela de Folha e exportação autenticada da lista em CSV.
 - **Contas por e-mail**: primeiro usuário configura a empresa; somente um administrador autenticado pode criar acessos adicionais na mesma instalação.
 - **Acesso por função**: Administrador tem controle total; Gestor consulta quadros e decide aprovações; Operador tem acesso de leitura aos quadros. Administradores podem alterar as funções em Segurança.
+- **Gestão de tarefas**: arraste cards entre etapas no Kanban ou altere-as na tabela; cada card tem checklist com progresso, tags, anexos (PDF/JPEG/PNG/WebP, até 6 MB) e histórico de alterações. Gestores veem tarefas do próprio departamento e tarefas compartilhadas sem departamento.
+- **Custeio por tarefa**: associe a tarefa em andamento à entrada e à saída do ponto para apurar horas e custo de mão de obra. A taxa horária é congelada no registro, usando salário mensal dividido por 220 horas. Insumos podem ser vinculados ao card e são baixados uma única vez quando ele sai de “A fazer”; falta de saldo impede a movimentação.
+- **Automações de quadro**: regras configuráveis para pedir aprovação quando o progresso chega a 100% ou avisar quando o custo real ultrapassa o teto do card. Cada regra dispara uma vez por tarefa; os avisos usam os canais ativos configurados em Segurança.
+- **Filtros e exportação do quadro**: combine etapa, prioridade, severidade, aprovação, departamento e busca; salve combinações neste navegador. Exporte CSV compatível com Excel ou use a impressão do navegador para salvar em PDF.
+- **Busca e comandos rápidos**: `Ctrl+K`/`Cmd+K` abre a busca e navegação; `/` abre os comandos e `N` leva à criação de tarefa.
+- **Agenda de espaços**: calendário mensal compartilhado entre departamentos para reservar salas, bancadas e recursos, com bloqueio de horários conflitantes. Gestores reservam em nome de seu departamento e podem cancelar as próprias reservas.
+- **Restrição opcional por IP no ponto**: Segurança aceita faixas CIDR. Quando configurada, o servidor exige que o IP da conexão esteja autorizado além da validação GPS habitual.
 - **Auditoria**: ações de escrita da API registram conta, horário, método, recurso, resposta HTTP e IP de conexão; a tela Segurança exibe as ações recentes.
 - **Autenticação em duas etapas**: configure TOTP em Segurança usando Google Authenticator, Authy ou outro aplicativo compatível. A chave é guardada no banco e o login exige o código após a ativação.
 - **Busca global**: use `Ctrl+K` ou `Cmd+K` para localizar quadros e, como administrador, colaboradores e produtos.
@@ -57,6 +64,8 @@ Para habilitar envios reais, configure os segredos no ambiente do servidor (nunc
 - WhatsApp Cloud API: `WHATSAPP_TOKEN` e `WHATSAPP_PHONE_ID`; cadastre o destinatário com código do país.
 
 O botão **Enviar teste** valida os canais de forma explícita. A fila offline guarda alterações pendentes no IndexedDB do navegador até sincronizar; use esse recurso somente em dispositivos confiáveis. Eventos WebSocket são locais à instância/processo e não substituem um broker compartilhado em uma implantação com várias instâncias.
+
+Anexos ficam no banco de dados e são disponibilizados apenas como download autenticado. A filtragem CIDR usa o endereço de conexão visto pelo servidor; em instalações atrás de proxy, configure o encaminhamento confiável de IP no servidor antes de ativá-la. O custo de mão de obra usa horas entre marcações de entrada/saída vinculadas ao card; períodos que atravessem tarefas devem ser registrados em pares separados para evitar atribuição incorreta.
 
 ## Testes
 

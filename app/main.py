@@ -2,17 +2,19 @@
 Rodar (na raiz do repositório):  uvicorn app.main:app --reload
 Docs:   http://localhost:8000/docs
 """
-import csv, hashlib, hmac, io, math, os, secrets, sqlite3, time
+import base64, binascii, csv, hashlib, hmac, io, logging, math, os, secrets, sqlite3, time
 import asyncio, json
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import psycopg2
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -53,12 +55,32 @@ CREATE TABLE IF NOT EXISTS tasks(
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee TEXT DEFAULT '',
   due TEXT DEFAULT '', status INTEGER DEFAULT 0,
   priority TEXT DEFAULT 'media', progress INTEGER DEFAULT 0,
-  approval TEXT DEFAULT 'pendente', severity TEXT DEFAULT 'normal');
+  approval TEXT DEFAULT 'pendente', severity TEXT DEFAULT 'normal',
+  department_id INTEGER, labor_budget_hours REAL DEFAULT 0,
+  cost_ceiling REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS task_checklist(
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS task_tags(
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  tag TEXT NOT NULL, PRIMARY KEY(task_id,tag));
+CREATE TABLE IF NOT EXISTS task_attachments(
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, content TEXT NOT NULL,
+  uploaded_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS task_history(
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL, action TEXT NOT NULL, details TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS task_materials(
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  material_id INTEGER NOT NULL REFERENCES materials(id), quantity REAL NOT NULL,
+  consumed_quantity REAL NOT NULL DEFAULT 0, unit_cost REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS time_entries(
   id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL REFERENCES employees(id),
   kind TEXT NOT NULL, at TEXT NOT NULL, lat REAL, lng REAL,
   distance_m REAL, accepted INTEGER NOT NULL, reason TEXT DEFAULT '',
-  cpf TEXT DEFAULT '', nsr INTEGER, prev_hash TEXT, hash TEXT, samples INTEGER DEFAULT 1, spread_m REAL DEFAULT 0);
+  cpf TEXT DEFAULT '', nsr INTEGER, prev_hash TEXT, hash TEXT, samples INTEGER DEFAULT 1,
+  spread_m REAL DEFAULT 0, task_id INTEGER REFERENCES tasks(id), labor_rate REAL);
 CREATE TABLE IF NOT EXISTS transactions(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL, description TEXT NOT NULL,
     amount REAL NOT NULL, due TEXT NOT NULL, paid INTEGER DEFAULT 0, paid_at TEXT,
@@ -72,6 +94,18 @@ CREATE TABLE IF NOT EXISTS departments(
 CREATE TABLE IF NOT EXISTS spaces(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT DEFAULT 'gestao',
   admin_email TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS space_bookings(
+  id INTEGER PRIMARY KEY, space_id INTEGER NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+  title TEXT NOT NULL, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL,
+  booked_by TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS automation_rules(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, trigger TEXT NOT NULL,
+  threshold REAL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS automation_runs(
+  rule_id INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL, PRIMARY KEY(rule_id,task_id));
 CREATE TABLE IF NOT EXISTS cost_analyses(
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, revenue REAL NOT NULL DEFAULT 0,
   material REAL NOT NULL DEFAULT 0, opex REAL NOT NULL DEFAULT 0, tax REAL NOT NULL DEFAULT 0);
@@ -114,7 +148,12 @@ MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
               "ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'media'",
               "ALTER TABLE tasks ADD COLUMN progress INTEGER DEFAULT 0",
               "ALTER TABLE tasks ADD COLUMN approval TEXT DEFAULT 'pendente'",
-              "ALTER TABLE tasks ADD COLUMN severity TEXT DEFAULT 'normal'"]
+              "ALTER TABLE tasks ADD COLUMN severity TEXT DEFAULT 'normal'",
+              "ALTER TABLE tasks ADD COLUMN department_id INTEGER",
+              "ALTER TABLE tasks ADD COLUMN labor_budget_hours REAL DEFAULT 0",
+              "ALTER TABLE tasks ADD COLUMN cost_ceiling REAL DEFAULT 0",
+              "ALTER TABLE time_entries ADD COLUMN task_id INTEGER",
+              "ALTER TABLE time_entries ADD COLUMN labor_rate REAL"]
 
 @contextmanager
 def db():
@@ -225,6 +264,12 @@ def admin(authorization: str = Header(default=""), x_admin_token: str = Header(d
     if x_admin_token and hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
         return
     raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
+
+def admin_context(authorization: str = Header(default=""), x_admin_token: str = Header(default="")):
+    admin(authorization, x_admin_token)
+    if authorization.startswith("Bearer "):
+        return principal_for_token(authorization[7:])
+    return {"role": "admin", "user": "admin-token", "department_id": None}
 
 # ---------- Conta da empresa e login ----------
 _fails: dict = {}
@@ -456,8 +501,12 @@ def global_search(q: str = "", who=Depends(manager_or_admin)):
         return []
     pattern = "%" + query.replace("%", "\\%").replace("_", "\\_") + "%"
     with db() as c:
-        tasks = rows(c.execute("SELECT id,title,assignee,status FROM tasks WHERE title LIKE ? ESCAPE '\\' "
-                               "OR assignee LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 8", (pattern, pattern)))
+        task_scope = "" if who["role"] != "manager" else " AND (department_id IS NULL OR department_id=?)"
+        task_args = (pattern, pattern) if who["role"] != "manager" else (
+            pattern, pattern, who["department_id"])
+        tasks = rows(c.execute("SELECT id,title,assignee,status FROM tasks WHERE "
+                               "(title LIKE ? ESCAPE '\\' OR assignee LIKE ? ESCAPE '\\')" + task_scope +
+                               " ORDER BY id DESC LIMIT 8", task_args))
         products = rows(c.execute("SELECT id,name FROM products WHERE name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 8",
                                   (pattern,))) if who["role"] == "admin" else []
         employees = []
@@ -759,12 +808,18 @@ class TaskIn(BaseModel):
     title: str; assignee: str = ""; due: str = ""; status: int = Field(default=0, ge=0, le=2)
     priority: str = Field(default="media"); progress: int = Field(default=0, ge=0, le=100)
     approval: str = Field(default="pendente"); severity: str = Field(default="normal")
+    department_id: Optional[int] = None
+    labor_budget_hours: float = Field(default=0, ge=0)
+    cost_ceiling: float = Field(default=0, ge=0)
 
 class TaskPatch(BaseModel):
     title: Optional[str] = None; assignee: Optional[str] = None; due: Optional[str] = None
     status: Optional[int] = Field(default=None, ge=0, le=2)
     priority: Optional[str] = None; progress: Optional[int] = Field(default=None, ge=0, le=100)
     approval: Optional[str] = None; severity: Optional[str] = None
+    department_id: Optional[int] = None
+    labor_budget_hours: Optional[float] = Field(default=None, ge=0)
+    cost_ceiling: Optional[float] = Field(default=None, ge=0)
 
 def norm_task(t: TaskIn):
     if t.priority not in PRI: raise HTTPException(400, "Prioridade inválida.")
@@ -772,21 +827,408 @@ def norm_task(t: TaskIn):
     if t.approval not in APPR: raise HTTPException(400, "Aprovação inválida.")
     return t
 
+TASK_STATUS = ("A fazer", "Em andamento", "Concluído")
+def task_history(c, task_id, actor, action, details):
+    c.execute("INSERT INTO task_history(task_id,actor,action,details,created_at) VALUES(?,?,?,?,?)",
+              (task_id, actor, action, details, iso(utcnow())))
+
+def sync_checklist_progress(c, task_id, actor, background):
+    counts = c.execute("SELECT COUNT(*) total,COALESCE(SUM(done),0) finished "
+                       "FROM task_checklist WHERE task_id=?", (task_id,)).fetchone()
+    if counts["total"] == 0:
+        return
+    progress = round(counts["finished"] * 100 / counts["total"])
+    old = c.execute("SELECT progress FROM tasks WHERE id=?", (task_id,)).fetchone()["progress"]
+    if old != progress:
+        c.execute("UPDATE tasks SET progress=? WHERE id=?", (progress, task_id))
+        task_history(c, task_id, actor, "Progresso", f"Checklist atualizou o progresso de {old}% para {progress}%.")
+        if progress == 100:
+            run_task_automations(c, task_id, background)
+
+def task_cost(c, task_id):
+    entries = rows(c.execute(
+        "SELECT employee_id,task_id,kind,at,COALESCE(labor_rate,salary/220.0) AS hourly_rate FROM time_entries "
+        "JOIN employees ON employees.id=time_entries.employee_id "
+        "WHERE accepted=1 ORDER BY time_entries.employee_id,time_entries.at,time_entries.id"))
+    openings, labor_hours, labor_cost = {}, 0.0, 0.0
+    for entry in entries:
+        key = entry["employee_id"]
+        if entry["kind"] == "entrada":
+            openings[key] = entry
+        elif entry["kind"] == "saida" and key in openings:
+            start = openings.pop(key)
+            if start["task_id"] != task_id and entry["task_id"] != task_id:
+                continue
+            hours = max(0, (datetime.fromisoformat(entry["at"]) -
+                            datetime.fromisoformat(start["at"])).total_seconds() / 3600)
+            labor_hours += hours
+            labor_cost += hours * (start["hourly_rate"] or 0)
+    materials = c.execute(
+        "SELECT COALESCE(SUM(consumed_quantity*unit_cost),0) FROM task_materials WHERE task_id=?",
+        (task_id,)).fetchone()[0]
+    return {"labor_hours": round(labor_hours, 2), "labor_cost": round(labor_cost, 2),
+            "material_cost": round(materials, 2), "actual_cost": round(labor_cost + materials, 2)}
+
+def consume_task_materials(c, task_id, background=None):
+    allocations = rows(c.execute(
+        "SELECT tm.id,tm.quantity,tm.consumed_quantity,tm.material_id,m.name,m.unit,m.stock,m.unit_cost,m.minimum_stock "
+        "FROM task_materials tm JOIN materials m ON m.id=tm.material_id WHERE tm.task_id=?",
+        (task_id,)))
+    pending = [item for item in allocations if item["consumed_quantity"] < item["quantity"]]
+    for item in pending:
+        amount = item["quantity"] - item["consumed_quantity"]
+        if item["stock"] < amount:
+            raise HTTPException(409, f"Estoque insuficiente de {item['name']}: disponível "
+                                     f"{item['stock']:g} {item['unit']}, necessário {amount:g}.")
+    for item in pending:
+        amount = item["quantity"] - item["consumed_quantity"]
+        cur = c.execute("UPDATE materials SET stock=stock-? WHERE id=? AND stock>=?",
+                        (amount, item["material_id"], amount))
+        if not cur.rowcount:
+            raise HTTPException(409, f"Estoque insuficiente de {item['name']}. Atualize o quadro e tente novamente.")
+        c.execute("UPDATE task_materials SET consumed_quantity=quantity,unit_cost=? WHERE id=?",
+                  (item["unit_cost"], item["id"]))
+        task_history(c, task_id, "Sistema", "Baixa de insumo",
+                     f"{amount:g} {item['unit']} de {item['name']} consumidos ao iniciar o card.")
+        if background and (item["stock"] - amount <= 0 or
+                           (item["minimum_stock"] > 0 and item["stock"] - amount <= item["minimum_stock"])):
+            background.add_task(dispatch_notifications,
+                                f"Alerta SIGI: baixa de matéria-prima para tarefa; estoque de {item['name']} "
+                                f"ficou em {item['stock'] - amount:g} {item['unit']}.")
+
+def run_task_automations(c, task_id, background):
+    task = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        return
+    rules = rows(c.execute("SELECT * FROM automation_rules WHERE active=1"))
+    for rule in rules:
+        should_run = (rule["trigger"] == "progress_complete_pending" and task["progress"] == 100)
+        if rule["trigger"] == "cost_over_ceiling_notify" and task["cost_ceiling"] > 0:
+            should_run = task_cost(c, task_id)["actual_cost"] > task["cost_ceiling"]
+        already = c.execute("SELECT 1 FROM automation_runs WHERE rule_id=? AND task_id=?",
+                            (rule["id"], task_id)).fetchone()
+        if not should_run or already:
+            continue
+        c.execute("INSERT INTO automation_runs(rule_id,task_id,created_at) VALUES(?,?,?)",
+                  (rule["id"], task_id, iso(utcnow())))
+        if rule["trigger"] == "progress_complete_pending":
+            c.execute("UPDATE tasks SET approval='pendente' WHERE id=?", (task_id,))
+            task_history(c, task_id, "Automação", "Aprovação", "Progresso em 100%: aprovação movida para pendente.")
+            background.add_task(dispatch_notifications,
+                                f"Automação: a tarefa {task['title']} chegou a 100% e aguarda aprovação.")
+        else:
+            cost = task_cost(c, task_id)["actual_cost"]
+            task_history(c, task_id, "Automação", "Custo", f"Custo real de R$ {cost:.2f} ultrapassou o teto.")
+            background.add_task(dispatch_notifications,
+                                f"Automação: custo da tarefa {task['title']} ultrapassou o teto "
+                                f"(R$ {cost:.2f} de R$ {task['cost_ceiling']:.2f}).")
+
 @app.post("/tasks", dependencies=[Depends(admin)], status_code=201)
-def add_task(t: TaskIn, background: BackgroundTasks):
+def add_task(t: TaskIn, background: BackgroundTasks, who=Depends(admin_context)):
     t = norm_task(t)
     with db() as c:
-        cur = c.execute("INSERT INTO tasks(title,assignee,due,status,priority,progress,approval,severity) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
-                        (t.title, t.assignee, t.due, t.status, t.priority, t.progress, t.approval, t.severity))
+        if t.department_id is not None and not c.execute("SELECT 1 FROM departments WHERE id=?",
+                                                         (t.department_id,)).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
+        cur = c.execute("INSERT INTO tasks(title,assignee,due,status,priority,progress,approval,severity,"
+                        "department_id,labor_budget_hours,cost_ceiling) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                        (t.title, t.assignee, t.due, t.status, t.priority, t.progress, t.approval,
+                         t.severity, t.department_id, t.labor_budget_hours, t.cost_ceiling))
         task_id = cur.fetchall()[0]["id"]
+        task_history(c, task_id, who["user"], "Criação", f"Tarefa criada: {t.title}.")
+        if t.status in (1, 2):
+            consume_task_materials(c, task_id, background)
+        run_task_automations(c, task_id, background)
     if t.status != 2 and (t.severity == "critico" or (t.due and t.due < local(utcnow()).date().isoformat())):
         background.add_task(dispatch_notifications, f"Alerta SIGI: tarefa em risco — {t.title}.")
     return {"id": task_id}
 
-@app.get("/tasks", dependencies=[Depends(manager_or_admin)])
-def list_tasks():
+def task_for_user(c, task_id, who):
+    task = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task:
+        raise HTTPException(404, "Tarefa não encontrada.")
+    if who["role"] == "manager" and task["department_id"] is not None and \
+            task["department_id"] != who["department_id"]:
+        raise HTTPException(404, "Tarefa não encontrada.")
+    return task
+
+@app.get("/tasks")
+def list_tasks(who=Depends(manager_or_admin)):
     with db() as c:
-        return rows(c.execute("SELECT * FROM tasks ORDER BY status, id"))
+        if who["role"] == "manager":
+            tasks = rows(c.execute("SELECT * FROM tasks WHERE department_id IS NULL OR department_id=? "
+                                   "ORDER BY status,id", (who["department_id"],)))
+        else:
+            tasks = rows(c.execute("SELECT * FROM tasks ORDER BY status, id"))
+        for task in tasks:
+            task["tags"] = [r["tag"] for r in c.execute(
+                "SELECT tag FROM task_tags WHERE task_id=? ORDER BY tag", (task["id"],))]
+            task["checklist_total"] = c.execute(
+                "SELECT COUNT(*) FROM task_checklist WHERE task_id=?", (task["id"],)).fetchone()[0]
+            task["checklist_done"] = c.execute(
+                "SELECT COUNT(*) FROM task_checklist WHERE task_id=? AND done=1", (task["id"],)).fetchone()[0]
+        return tasks
+
+@app.get("/tasks/export.csv")
+def export_tasks(q: str = "", status: Optional[int] = None, priority: Optional[str] = None,
+                 severity: Optional[str] = None, approval: Optional[str] = None,
+                 department_id: Optional[int] = None, who=Depends(manager_or_admin)):
+    if status is not None and status not in (0, 1, 2):
+        raise HTTPException(400, "Etapa inválida.")
+    if priority is not None and priority not in PRI:
+        raise HTTPException(400, "Prioridade inválida.")
+    if severity is not None and severity not in SEV:
+        raise HTTPException(400, "Severidade inválida.")
+    if approval is not None and approval not in APPR:
+        raise HTTPException(400, "Aprovação inválida.")
+    conditions, params = [], []
+    if q.strip():
+        pattern = "%" + q.strip()[:80].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        conditions.append("(title LIKE ? ESCAPE '\\' OR assignee LIKE ? ESCAPE '\\')")
+        params.extend((pattern, pattern))
+    for column, value in (("status", status), ("priority", priority), ("severity", severity),
+                          ("approval", approval), ("department_id", department_id)):
+        if value is not None:
+            conditions.append(f"{column}=?")
+            params.append(value)
+    with db() as c:
+        if who["role"] == "manager":
+            conditions.append("(department_id IS NULL OR department_id=?)")
+            params.append(who["department_id"])
+        sql = ("SELECT title,status,priority,severity,due,progress,approval,assignee,"
+               "labor_budget_hours,cost_ceiling FROM tasks")
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        tasks = rows(c.execute(sql + " ORDER BY status,id", params))
+    out = io.StringIO()
+    out.write("\ufeff")
+    writer = csv.writer(out, delimiter=";")
+    writer.writerow(["Tarefa", "Etapa", "Prioridade", "Severidade", "Prazo", "Progresso",
+                     "Aprovação", "Responsável", "Horas orçadas", "Teto de custo"])
+    for task in tasks:
+        task["status"] = TASK_STATUS[task["status"]]
+        writer.writerow([csv_safe(value) for value in task.values()])
+    return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="quadros.csv"'})
+
+@app.get("/tasks/{tid}")
+def task_detail(tid: int, who=Depends(manager_or_admin)):
+    with db() as c:
+        task = task_for_user(c, tid, who)
+        result = dict(task)
+        result["checklist"] = rows(c.execute("SELECT id,title,done FROM task_checklist WHERE task_id=? ORDER BY id",
+                                              (tid,)))
+        result["tags"] = [item["tag"] for item in c.execute(
+            "SELECT tag FROM task_tags WHERE task_id=? ORDER BY tag", (tid,))]
+        result["attachments"] = rows(c.execute(
+            "SELECT id,name,mime,size,uploaded_at FROM task_attachments WHERE task_id=? ORDER BY id DESC",
+            (tid,)))
+        result["history"] = rows(c.execute(
+            "SELECT actor,action,details,created_at FROM task_history WHERE task_id=? ORDER BY id DESC LIMIT 100",
+            (tid,)))
+        result["materials"] = rows(c.execute(
+            "SELECT tm.id,tm.material_id,m.name,m.unit,tm.quantity,tm.consumed_quantity,tm.unit_cost "
+            "FROM task_materials tm JOIN materials m ON m.id=tm.material_id WHERE tm.task_id=? ORDER BY tm.id",
+            (tid,)))
+        result["cost"] = task_cost(c, tid)
+        return result
+
+@app.get("/tasks/{tid}/cost")
+def task_cost_report(tid: int, who=Depends(manager_or_admin)):
+    with db() as c:
+        task = task_for_user(c, tid, who)
+        return {**task_cost(c, tid), "labor_budget_hours": task["labor_budget_hours"],
+                "cost_ceiling": task["cost_ceiling"]}
+
+class ChecklistIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+
+class ChecklistPatch(BaseModel):
+    done: bool
+
+class TagsIn(BaseModel):
+    tags: list[str] = Field(max_length=12)
+
+class AttachmentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=180)
+    mime: Literal["application/pdf", "image/jpeg", "image/png", "image/webp"]
+    content_base64: str = Field(min_length=1, max_length=8_400_000)
+
+@app.post("/tasks/{tid}/checklist", dependencies=[Depends(admin)])
+def add_checklist_item(tid: int, item: ChecklistIn, who=Depends(admin_context)):
+    title = item.title.strip()
+    if not title:
+        raise HTTPException(400, "A descrição da etapa não pode ficar vazia.")
+    with db() as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone():
+            raise HTTPException(404, "Tarefa não encontrada.")
+        cur = c.execute("INSERT INTO task_checklist(task_id,title,done) VALUES(?,?,0) RETURNING id",
+                        (tid, title))
+        item_id = cur.fetchall()[0]["id"]
+        task_history(c, tid, who["user"], "Checklist", f"Etapa adicionada: {title}.")
+    return {"id": item_id}
+
+@app.patch("/tasks/{tid}/checklist/{item_id}", dependencies=[Depends(admin)])
+def update_checklist_item(tid: int, item_id: int, item: ChecklistPatch,
+                          background: BackgroundTasks, who=Depends(admin_context)):
+    with db() as c:
+        cur = c.execute("UPDATE task_checklist SET done=? WHERE task_id=? AND id=?",
+                        (int(item.done), tid, item_id))
+        if not cur.rowcount:
+            raise HTTPException(404, "Etapa não encontrada.")
+        title = c.execute("SELECT title FROM task_checklist WHERE id=?", (item_id,)).fetchone()["title"]
+        task_history(c, tid, who["user"], "Checklist",
+                     f"Etapa {'concluída' if item.done else 'reaberta'}: {title}.")
+        sync_checklist_progress(c, tid, who["user"], background)
+    return {"ok": True}
+
+@app.delete("/tasks/{tid}/checklist/{item_id}", dependencies=[Depends(admin)])
+def delete_checklist_item(tid: int, item_id: int, background: BackgroundTasks, who=Depends(admin_context)):
+    with db() as c:
+        item = c.execute("SELECT title FROM task_checklist WHERE task_id=? AND id=?", (tid, item_id)).fetchone()
+        if not item:
+            raise HTTPException(404, "Etapa não encontrada.")
+        c.execute("DELETE FROM task_checklist WHERE task_id=? AND id=?", (tid, item_id))
+        task_history(c, tid, who["user"], "Checklist", f"Etapa removida: {item['title']}.")
+        sync_checklist_progress(c, tid, who["user"], background)
+    return {"ok": True}
+
+@app.put("/tasks/{tid}/tags", dependencies=[Depends(admin)])
+def update_task_tags(tid: int, payload: TagsIn, who=Depends(admin_context)):
+    tags = list(dict.fromkeys(tag.strip()[:32] for tag in payload.tags if tag.strip()))
+    with db() as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone():
+            raise HTTPException(404, "Tarefa não encontrada.")
+        c.execute("DELETE FROM task_tags WHERE task_id=?", (tid,))
+        for tag in tags:
+            c.execute("INSERT INTO task_tags(task_id,tag) VALUES(?,?)", (tid, tag))
+        task_history(c, tid, who["user"], "Tags", "Tags definidas: " + (", ".join(tags) or "nenhuma") + ".")
+    return {"tags": tags}
+
+@app.post("/tasks/{tid}/attachments", dependencies=[Depends(admin)], status_code=201)
+def add_task_attachment(tid: int, attachment: AttachmentIn, who=Depends(admin_context)):
+    try:
+        content = base64.b64decode(attachment.content_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Arquivo codificado inválido.")
+    if not content or len(content) > 6 * 1024 * 1024:
+        raise HTTPException(413, "O anexo deve ter até 6 MB.")
+    signatures = {"application/pdf": content.startswith(b"%PDF-"),
+                  "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+                  "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+                  "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"}
+    if not signatures[attachment.mime]:
+        raise HTTPException(400, "O conteúdo do arquivo não corresponde ao tipo informado.")
+    name = attachment.name.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not name or name in {".", ".."}:
+        raise HTTPException(400, "Nome de arquivo inválido.")
+    with db() as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone():
+            raise HTTPException(404, "Tarefa não encontrada.")
+        cur = c.execute("INSERT INTO task_attachments(task_id,name,mime,size,content,uploaded_at) "
+                        "VALUES(?,?,?,?,?,?) RETURNING id",
+                        (tid, name, attachment.mime, len(content), base64.b64encode(content).decode(), iso(utcnow())))
+        attachment_id = cur.fetchall()[0]["id"]
+        task_history(c, tid, who["user"], "Anexo", f"Arquivo anexado: {name}.")
+    return {"id": attachment_id, "name": name, "size": len(content)}
+
+@app.get("/tasks/{tid}/attachments/{attachment_id}")
+def download_task_attachment(tid: int, attachment_id: int, who=Depends(manager_or_admin)):
+    with db() as c:
+        task_for_user(c, tid, who)
+        file = c.execute("SELECT name,mime,content FROM task_attachments WHERE task_id=? AND id=?",
+                         (tid, attachment_id)).fetchone()
+        if not file:
+            raise HTTPException(404, "Anexo não encontrado.")
+    return Response(base64.b64decode(file["content"]), media_type="application/octet-stream",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(file['name'])}",
+                             "X-Content-Type-Options": "nosniff"})
+
+@app.delete("/tasks/{tid}/attachments/{attachment_id}", dependencies=[Depends(admin)])
+def delete_task_attachment(tid: int, attachment_id: int, who=Depends(admin_context)):
+    with db() as c:
+        file = c.execute("SELECT name FROM task_attachments WHERE task_id=? AND id=?",
+                         (tid, attachment_id)).fetchone()
+        if not file:
+            raise HTTPException(404, "Anexo não encontrado.")
+        c.execute("DELETE FROM task_attachments WHERE task_id=? AND id=?", (tid, attachment_id))
+        task_history(c, tid, who["user"], "Anexo", f"Arquivo removido: {file['name']}.")
+    return {"ok": True}
+
+class TaskMaterialIn(BaseModel):
+    material_id: int
+    quantity: float = Field(gt=0)
+
+@app.post("/tasks/{tid}/materials", dependencies=[Depends(admin)], status_code=201)
+def add_task_material(tid: int, item: TaskMaterialIn, who=Depends(admin_context)):
+    with db() as c:
+        task = c.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchone()
+        material = c.execute("SELECT name,unit,stock FROM materials WHERE id=?", (item.material_id,)).fetchone()
+        if not task:
+            raise HTTPException(404, "Tarefa não encontrada.")
+        if not material:
+            raise HTTPException(404, "Material não encontrado.")
+        if material["stock"] < item.quantity:
+            raise HTTPException(409, f"Estoque insuficiente de {material['name']}: "
+                                     f"disponível {material['stock']:g} {material['unit']}.")
+        if task["status"] != 0:
+            raise HTTPException(409, "Vincule os materiais antes de iniciar a tarefa.")
+        cur = c.execute("INSERT INTO task_materials(task_id,material_id,quantity) VALUES(?,?,?) RETURNING id",
+                        (tid, item.material_id, item.quantity))
+        link_id = cur.fetchall()[0]["id"]
+        task_history(c, tid, who["user"], "Material",
+                     f"Insumo vinculado: {item.quantity:g} {material['unit']} de {material['name']}.")
+    return {"id": link_id}
+
+@app.delete("/tasks/{tid}/materials/{link_id}", dependencies=[Depends(admin)])
+def remove_task_material(tid: int, link_id: int, who=Depends(admin_context)):
+    with db() as c:
+        item = c.execute(
+            "SELECT tm.quantity,tm.consumed_quantity,m.name,m.unit FROM task_materials tm "
+            "JOIN materials m ON m.id=tm.material_id WHERE tm.task_id=? AND tm.id=?",
+            (tid, link_id)).fetchone()
+        if not item:
+            raise HTTPException(404, "Insumo vinculado não encontrado.")
+        if item["consumed_quantity"] > 0:
+            raise HTTPException(409, "A baixa já foi registrada; o consumo não pode ser desfeito por esta tela.")
+        c.execute("DELETE FROM task_materials WHERE task_id=? AND id=?", (tid, link_id))
+        task_history(c, tid, who["user"], "Material", f"Vínculo de {item['name']} removido.")
+    return {"ok": True}
+
+class AutomationIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    trigger: Literal["progress_complete_pending", "cost_over_ceiling_notify"]
+
+@app.get("/automations", dependencies=[Depends(admin)])
+def list_automations():
+    with db() as c:
+        return rows(c.execute("SELECT * FROM automation_rules ORDER BY id"))
+
+@app.post("/automations", dependencies=[Depends(admin)], status_code=201)
+def add_automation(rule: AutomationIn):
+    name = rule.name.strip()
+    if not name:
+        raise HTTPException(400, "Informe um nome para a automação.")
+    with db() as c:
+        cur = c.execute("INSERT INTO automation_rules(name,trigger,active) VALUES(?,?,1) RETURNING id",
+                        (name, rule.trigger))
+        return {"id": cur.fetchall()[0]["id"]}
+
+@app.patch("/automations/{rule_id}", dependencies=[Depends(admin)])
+def toggle_automation(rule_id: int, active: bool):
+    with db() as c:
+        cur = c.execute("UPDATE automation_rules SET active=? WHERE id=?", (int(active), rule_id))
+        if not cur.rowcount:
+            raise HTTPException(404, "Automação não encontrada.")
+    return {"ok": True}
+
+@app.delete("/automations/{rule_id}", dependencies=[Depends(admin)])
+def delete_automation(rule_id: int):
+    with db() as c:
+        cur = c.execute("DELETE FROM automation_rules WHERE id=?", (rule_id,))
+        if not cur.rowcount:
+            raise HTTPException(404, "Automação não encontrada.")
+    return {"ok": True}
 
 class ApprovalIn(BaseModel):
     decision: Literal["aprovado", "recusado"]
@@ -797,36 +1239,60 @@ def decide_task_approval(tid: int, decision: ApprovalIn,
     if who["role"] not in ("admin", "manager"):
         raise HTTPException(403, "Somente administradores e gestores podem aprovar tarefas.")
     with db() as c:
-        task = c.execute("SELECT title FROM tasks WHERE id=?", (tid,)).fetchone()
-        if not task:
+        task = task_for_user(c, tid, who)
+        if who["role"] == "manager" and task["department_id"] is not None and \
+                task["department_id"] != who["department_id"]:
             raise HTTPException(404, "Tarefa não encontrada.")
         cur = c.execute("UPDATE tasks SET approval=? WHERE id=? AND approval='pendente'",
                         (decision.decision, tid))
         if not cur.rowcount:
             raise HTTPException(409, "Esta tarefa não está aguardando aprovação.")
         title = task["title"]
+        task_history(c, tid, who["user"], "Aprovação", f"Tarefa {decision.decision} por {who['user']}.")
     message = f"Tarefa {decision.decision}: {title} (por {who['user']})."
     background.add_task(dispatch_notifications, message)
     return {"ok": True, "approval": decision.decision}
 
 @app.patch("/tasks/{tid}/status/{status}", dependencies=[Depends(admin)])
-def move_task(tid: int, status: int):
+def move_task(tid: int, status: int, background: BackgroundTasks, who=Depends(admin_context)):
     if status not in (0, 1, 2): raise HTTPException(400, "Status deve ser 0, 1 ou 2.")
     with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        task = c.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchone()
+        if not task: raise HTTPException(404, "Tarefa não encontrada.")
+        if task["status"] == 0 and status in (1, 2):
+            consume_task_materials(c, tid, background)
         cur = c.execute("UPDATE tasks SET status=? WHERE id=?", (status, tid))
-        if not cur.rowcount: raise HTTPException(404, "Tarefa não encontrada.")
+        task_history(c, tid, who["user"], "Etapa",
+                     f"Etapa alterada de {TASK_STATUS[task['status']]} para {TASK_STATUS[status]}.")
+        run_task_automations(c, tid, background)
     return {"ok": True}
 
 @app.patch("/tasks/{tid}", dependencies=[Depends(admin)])
-def edit_task(tid: int, p: TaskPatch):
+def edit_task(tid: int, p: TaskPatch, background: BackgroundTasks, who=Depends(admin_context)):
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     if "priority" in data and data["priority"] not in PRI: raise HTTPException(400, "Prioridade inválida.")
     if "severity" in data and data["severity"] not in SEV: raise HTTPException(400, "Status inválido.")
     if "approval" in data and data["approval"] not in APPR: raise HTTPException(400, "Aprovação inválida.")
+    if "title" in data and not data["title"].strip(): raise HTTPException(400, "O título não pode ficar vazio.")
     if not data: raise HTTPException(400, "Nada para atualizar.")
     with db() as c:
+        old = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+        if not old: raise HTTPException(404, "Tarefa não encontrada.")
+        if data.get("department_id") is not None and not c.execute(
+                "SELECT 1 FROM departments WHERE id=?", (data["department_id"],)).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
         cur = c.execute(f"UPDATE tasks SET {','.join(k+'=?' for k in data)} WHERE id=?", (*data.values(), tid))
-        if not cur.rowcount: raise HTTPException(404, "Tarefa não encontrada.")
+        for key, value in data.items():
+            if value != old[key]:
+                labels = {"due": "prazo", "progress": "progresso", "assignee": "responsável",
+                          "priority": "prioridade", "severity": "severidade", "approval": "aprovação",
+                          "title": "título", "department_id": "departamento",
+                          "labor_budget_hours": "horas orçadas", "cost_ceiling": "teto de custo"}
+                task_history(c, tid, who["user"], labels.get(key, key),
+                             f"{labels.get(key, key).capitalize()} alterado de {old[key] or 'vazio'} para {value}.")
+        if "progress" in data and data["progress"] == 100 and old["progress"] != 100:
+            run_task_automations(c, tid, background)
     return {"ok": True}
 
 @app.delete("/tasks/{tid}", dependencies=[Depends(admin)])
@@ -1050,7 +1516,7 @@ def add_space(s: SpaceIn):
         space_id = cur.fetchall()[0]["id"]
     return {"id": space_id}
 
-@app.get("/spaces", dependencies=[Depends(admin)])
+@app.get("/spaces", dependencies=[Depends(manager_or_admin)])
 def list_spaces():
     with db() as c:
         return rows(c.execute("SELECT * FROM spaces ORDER BY id"))
@@ -1068,6 +1534,111 @@ def edit_space(sid: int, s: SpaceIn):
 def delete_space(sid: int):
     with db() as c: c.execute("DELETE FROM spaces WHERE id=?", (sid,))
     return {"ok": True}
+
+class BookingIn(BaseModel):
+    space_id: int
+    title: str = Field(min_length=1, max_length=160)
+    starts_at: str
+    ends_at: str
+    department_id: Optional[int] = None
+
+def booking_time(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "Data inválida. Informe data e hora com fuso horário.")
+    if parsed.tzinfo is None:
+        raise HTTPException(400, "Informe o fuso horário no agendamento.")
+    return parsed.astimezone(timezone.utc).isoformat(timespec="minutes")
+
+@app.get("/space-bookings", dependencies=[Depends(manager_or_admin)])
+def list_space_bookings(start: Optional[str] = None, end: Optional[str] = None):
+    conditions, params = [], []
+    if start:
+        conditions.append("ends_at>?")
+        params.append(booking_time(start))
+    if end:
+        conditions.append("starts_at<?")
+        params.append(booking_time(end))
+    query = ("SELECT b.*,s.name AS space_name,d.name AS department_name "
+             "FROM space_bookings b JOIN spaces s ON s.id=b.space_id "
+             "LEFT JOIN departments d ON d.id=b.department_id")
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY starts_at,space_name"
+    with db() as c:
+        return rows(c.execute(query, params))
+
+@app.post("/space-bookings", dependencies=[Depends(principal)], status_code=201)
+def add_space_booking(booking: BookingIn, who=Depends(principal)):
+    if who["role"] not in ("admin", "manager"):
+        raise HTTPException(403, "Somente gestores podem agendar espaços.")
+    title = booking.title.strip()
+    start, end = booking_time(booking.starts_at), booking_time(booking.ends_at)
+    if not title or start >= end:
+        raise HTTPException(400, "Informe um título e um horário final posterior ao inicial.")
+    department_id = booking.department_id
+    if who["role"] == "manager":
+        if who["department_id"] is None:
+            raise HTTPException(403, "Vincule sua conta a um departamento antes de agendar.")
+        department_id = who["department_id"]
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        if not c.execute("SELECT 1 FROM spaces WHERE id=?", (booking.space_id,)).fetchone():
+            raise HTTPException(404, "Espaço não encontrado.")
+        if department_id is not None and not c.execute("SELECT 1 FROM departments WHERE id=?",
+                                                       (department_id,)).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
+        overlap = c.execute("SELECT 1 FROM space_bookings WHERE space_id=? "
+                            "AND starts_at<? AND ends_at>? LIMIT 1",
+                            (booking.space_id, end, start)).fetchone()
+        if overlap:
+            raise HTTPException(409, "Este espaço já está reservado nesse horário.")
+        cur = c.execute("INSERT INTO space_bookings(space_id,department_id,title,starts_at,ends_at,booked_by) "
+                        "VALUES(?,?,?,?,?,?) RETURNING id",
+                        (booking.space_id, department_id, title, start, end, who["user"]))
+        return {"id": cur.fetchall()[0]["id"]}
+
+@app.delete("/space-bookings/{booking_id}")
+def delete_space_booking(booking_id: int, who=Depends(principal)):
+    if who["role"] not in ("admin", "manager"):
+        raise HTTPException(403, "Somente gestores podem cancelar reservas.")
+    with db() as c:
+        booking = c.execute("SELECT booked_by,department_id FROM space_bookings WHERE id=?",
+                            (booking_id,)).fetchone()
+        if not booking:
+            raise HTTPException(404, "Agendamento não encontrado.")
+        if who["role"] == "manager" and (booking["booked_by"] != who["user"] or
+                                           booking["department_id"] != who["department_id"]):
+            raise HTTPException(403, "Você só pode cancelar reservas do seu departamento feitas por você.")
+        cur = c.execute("DELETE FROM space_bookings WHERE id=?", (booking_id,))
+        if not cur.rowcount:
+            raise HTTPException(404, "Agendamento não encontrado.")
+    return {"ok": True}
+
+class ClockIpPolicy(BaseModel):
+    ranges: list[str] = Field(max_length=20)
+
+@app.get("/settings/clock-ip", dependencies=[Depends(admin)])
+def get_clock_ip_policy():
+    with db() as c:
+        stored = settings(c).get("clock_ip_ranges", "[]")
+    try:
+        return {"ranges": json.loads(stored)}
+    except json.JSONDecodeError as error:
+        raise HTTPException(500, "A política de IP salva está inválida.") from error
+
+@app.put("/settings/clock-ip", dependencies=[Depends(admin)])
+def update_clock_ip_policy(policy: ClockIpPolicy):
+    try:
+        ranges = list(dict.fromkeys(str(ip_network(value.strip(), strict=False))
+                                    for value in policy.ranges))
+    except ValueError:
+        raise HTTPException(400, "Informe faixas CIDR válidas, por exemplo 192.168.1.0/24.")
+    with db() as c:
+        c.execute("INSERT INTO settings(k,v) VALUES('clock_ip_ranges',?) "
+                  "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (json.dumps(ranges),))
+    return {"ranges": ranges}
 
 # ---------- Painéis de custo / DRE sintético ----------
 class AnalysisIn(BaseModel):
@@ -1193,10 +1764,18 @@ def send_notification(channel, message):
                 raise RuntimeError(f"WhatsApp respondeu com HTTP {response.status}.")
 
 def dispatch_notifications(message):
+    import smtplib
+
     with db() as c:
         channels = rows(c.execute("SELECT kind,recipient FROM notification_channels WHERE active=1"))
     for channel in channels:
-        send_notification(channel, message)
+        try:
+            send_notification(channel, message)
+        except (HTTPException, OSError, ValueError, RuntimeError, smtplib.SMTPException) as error:
+            logging.getLogger(__name__).exception(
+                "Falha ao enviar notificação %s para %s: %s",
+                channel["kind"], channel["recipient"], error,
+            )
 
 @app.get("/notification-channels", dependencies=[Depends(admin)])
 def list_notification_channels():
@@ -1239,8 +1818,9 @@ def test_notifications(payload: NotificationTest):
 
 # ---------- Ponto com localização em tempo real ----------
 @app.get("/clock/employees")
-def clock_employees():
+def clock_employees(request: Request):
     with db() as c:
+        verify_clock_ip(request.client.host if request.client else "", settings(c))
         return rows(c.execute("SELECT id,name FROM employees WHERE active=1 ORDER BY name"))
 
 def check_employee(c, employee_id: int, pin: str):
@@ -1260,13 +1840,25 @@ class Live(BaseModel):
     lat: float = Field(ge=-90, le=90); lng: float = Field(ge=-180, le=180)
     accuracy_m: float = Field(default=0, ge=0)
 
+def verify_clock_ip(client_host, settings_row):
+    try:
+        ranges = json.loads(settings_row.get("clock_ip_ranges", "[]"))
+        if ranges:
+            address = ip_address(client_host or "")
+            if not any(address in ip_network(value) for value in ranges):
+                raise HTTPException(403, "Este ponto só pode ser registrado pela rede autorizada.")
+    except (ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(403, "Não foi possível validar o IP da rede autorizada.") from error
+
 @app.post("/clock/live")
-def clock_live(b: Live):
+def clock_live(b: Live, request: Request):
     """Chamado a cada poucos segundos pelo aparelho enquanto o funcionário está na tela de ponto.
     Só informa a distância (para o funcionário se posicionar); não grava nada."""
     with db() as c:
         check_employee(c, b.employee_id, b.pin)
-        w = workplace_of(settings(c))
+        configured = settings(c)
+        verify_clock_ip(request.client.host if request.client else "", configured)
+        w = workplace_of(configured)
     if not w: raise HTTPException(409, "Local de trabalho não configurado.")
     d = haversine(w["lat"], w["lng"], b.lat, b.lng)
     gps_ok = b.accuracy_m <= MAX_GPS_ERROR_M
@@ -1281,18 +1873,29 @@ class Clock(BaseModel):
     employee_id: int; pin: str
     consent: bool = False
     samples: list[Sample] = Field(min_length=1, max_length=20)
+    task_id: Optional[int] = None
+
+@app.get("/clock/tasks")
+def clock_tasks(employee_id: int, pin: str, request: Request):
+    with db() as c:
+        employee = check_employee(c, employee_id, pin)
+        verify_clock_ip(request.client.host if request.client else "", settings(c))
+        return rows(c.execute(
+            "SELECT id,title,due FROM tasks WHERE status=1 AND (assignee='' OR lower(assignee)=lower(?)) "
+            "ORDER BY due,id", (employee["name"],)))
 
 def entry_hash(prev, nsr, cpf, at, eid, kind, lat, lng):
     return hashlib.sha256(f"{prev}|{nsr}|{cpf}|{at}|{eid}|{kind}|{lat:.6f}|{lng:.6f}".encode()).hexdigest()
 
 @app.post("/clock")
-def clock(b: Clock):
+def clock(b: Clock, request: Request, background: BackgroundTasks):
     if not b.consent:
         raise HTTPException(400, "É preciso autorizar o uso da localização para bater ponto.")
     now = utcnow(); now_ms = now.timestamp() * 1000
     with db() as c:
         e = check_employee(c, b.employee_id, b.pin)
         s = settings(c); w = workplace_of(s)
+        verify_clock_ip(request.client.host if request.client else "", s)
         if not w: raise HTTPException(409, "Local de trabalho não configurado.")
         best = min(b.samples, key=lambda x: x.accuracy_m)
         dist = haversine(w["lat"], w["lng"], best.lat, best.lng)
@@ -1320,6 +1923,22 @@ def clock(b: Clock):
         n = c.execute("SELECT COUNT(*) FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<?",
                       (e["id"], a, z)).fetchone()[0]
         kind = "entrada" if n % 2 == 0 else "saida"
+        task_id = b.task_id
+        previous_task = None
+        if kind == "saida":
+            previous_entry = c.execute(
+                "SELECT task_id FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
+                "ORDER BY id DESC LIMIT 1", (e["id"], a, z)).fetchone()
+            previous_task = previous_entry["task_id"] if previous_entry else None
+            if task_id not in (None, previous_task):
+                raise HTTPException(400, "Na saída, mantenha a tarefa vinculada à entrada.")
+            task_id = previous_task
+        if task_id is not None:
+            task = c.execute("SELECT title,assignee,status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task or (kind == "entrada" and task["status"] != 1):
+                raise HTTPException(400, "Selecione uma tarefa que esteja em andamento.")
+            if kind == "entrada" and task["assignee"] and task["assignee"].casefold() != e["name"].casefold():
+                raise HTTPException(403, "Esta tarefa está atribuída a outra pessoa.")
         at = iso(now)
         nsr = prev_h = h = None
         if ok:   # NSR sequencial + encadeamento de hash: qualquer alteração posterior é detectável
@@ -1327,10 +1946,12 @@ def clock(b: Clock):
             nsr = (last["nsr"] if last else 0) + 1
             prev_h = last["hash"] if last else "0" * 64
             h = entry_hash(prev_h, nsr, e["cpf"], at, e["id"], kind, best.lat, best.lng)
-        c.execute("INSERT INTO time_entries(employee_id,kind,at,lat,lng,distance_m,accepted,reason,cpf,nsr,prev_hash,hash,samples,spread_m)"
-                  " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO time_entries(employee_id,kind,at,lat,lng,distance_m,accepted,reason,cpf,nsr,prev_hash,hash,samples,spread_m,task_id,labor_rate)"
+                  " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (e["id"], kind, at, best.lat, best.lng, round(dist, 1), int(ok), reason, e["cpf"], nsr, prev_h, h,
-                   len(b.samples), round(spread, 1)))
+                   len(b.samples), round(spread, 1), task_id, e["salary"] / 220))
+        if task_id is not None and kind == "saida":
+            run_task_automations(c, task_id, background)
     if not ok: raise HTTPException(403, reason)
     return {"kind": kind, "at": at, "distance_m": round(dist), "nsr": nsr, "hash": h,
             "comprovante": {"titulo": "Comprovante de Registro de Ponto do Trabalhador",
