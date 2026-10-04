@@ -15,8 +15,9 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 ## O que foi acrescentado (SIGI)
 
 - **DRE sintético** no painel: receita bruta, consumo de matéria-prima, custos operacionais + impostos e lucro líquido grosso com margem.
+- **Inteligência operacional** no painel: composição financeira, presença dos últimos 14 dias, horas do mês com marcações abertas atualizadas ao vivo e alertas automáticos de estoque, tarefas críticas/atrasadas e horas extras. O painel atualiza a cada 30 segundos; horas extras geram alerta a partir de 8 h por funcionário no mês.
 - **Quadros em tabela**: item, status (crítico/atenção/ok), prioridade, prazo, progresso, aprovação e responsável — além do kanban.
-- **Matéria-prima** com estoque e valor.
+- **Matéria-prima** com estoque, valor e limite mínimo configurável por item para alertas de reposição.
 - **Painéis de custo** que consolidam o DRE.
 - **Departamentos** e **espaços** (vínculo de e-mail de administrador).
 - **Integrações** (webhook, CSV, WhatsApp, ERP).
@@ -24,6 +25,13 @@ Na primeira execução, use **Criar conta da empresa** na tela de login para reg
 - **Exportação financeira em CSV** para contas a pagar e receber, com neutralização de fórmulas em campos de texto.
 - **Funcionários**: cadastro na tela de Folha e exportação autenticada da lista em CSV.
 - **Contas por e-mail**: primeiro usuário configura a empresa; somente um administrador autenticado pode criar acessos adicionais na mesma instalação.
+- **Acesso por função**: Administrador tem controle total; Gestor consulta quadros e decide aprovações; Operador tem acesso de leitura aos quadros. Administradores podem alterar as funções em Segurança.
+- **Auditoria**: ações de escrita da API registram conta, horário, método, recurso, resposta HTTP e IP de conexão; a tela Segurança exibe as ações recentes.
+- **Autenticação em duas etapas**: configure TOTP em Segurança usando Google Authenticator, Authy ou outro aplicativo compatível. A chave é guardada no banco e o login exige o código após a ativação.
+- **Busca global**: use `Ctrl+K` ou `Cmd+K` para localizar quadros e, como administrador, colaboradores e produtos.
+- **Offline/PWA**: o aplicativo instala como PWA e mantém a interface disponível offline. Depois de abrir os quadros ou materiais online, alterações em registros existentes podem entrar em uma fila local e sincronizam ao recuperar a conexão; cadastros novos e outros módulos continuam exigindo conexão.
+- **Eventos em tempo real**: alterações aceitas são transmitidas via WebSocket às sessões abertas na mesma instância do servidor; o painel também atualiza periodicamente.
+- **Avisos por e-mail e WhatsApp**: em Segurança, cadastre destinatários e teste o envio. Aprovações, novas tarefas críticas/atrasadas e materiais sem saldo/abaixo do mínimo disparam avisos aos canais ativos.
 - **Contas de funcionário**: a chefia pode criar e-mail e senha no cadastro de Folha. O funcionário entra pela opção Funcionário na tela inicial; sua conta não dá acesso aos dados administrativos.
 - **Comunicação da equipe**: mensagens gerais para todos e conversas privadas entre a chefia e cada funcionário. O servidor valida o acesso e mantém cada conversa privada isolada.
 - **Tema claro e escuro** com transição suave, preferência persistida no navegador e suporte ao tema do sistema.
@@ -38,6 +46,17 @@ Por padrão, o SQLite registra os dados operacionais do sistema em `data/flux.db
 4. Reinicie o aplicativo. A partir daí, ele usa o Supabase; sem `SUPABASE_DATABASE_URL`, usa SQLite local.
 
 O esquema está em [`supabase/schema.sql`](supabase/schema.sql), com RLS ativado e acesso direto pela API pública do Supabase revogado para as tabelas da aplicação. A migração é transacional, preserva os IDs e para sem alterar os dados se encontrar tabelas de destino preenchidas. Faça um backup de `data/flux.db` antes de migrar.
+
+## Segurança e notificações
+
+Os administradores configuram 2FA, funções, auditoria e destinos em **Segurança**. A conta principal de administrador não pode ser rebaixada. O código TOTP é válido por janelas curtas; guarde a chave de configuração em local seguro.
+
+Para habilitar envios reais, configure os segredos no ambiente do servidor (nunca no navegador ou no Git):
+
+- E-mail: `SMTP_HOST`, `SMTP_PORT` (padrão `587`), `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_FROM`.
+- WhatsApp Cloud API: `WHATSAPP_TOKEN` e `WHATSAPP_PHONE_ID`; cadastre o destinatário com código do país.
+
+O botão **Enviar teste** valida os canais de forma explícita. A fila offline guarda alterações pendentes no IndexedDB do navegador até sincronizar; use esse recurso somente em dispositivos confiáveis. Eventos WebSocket são locais à instância/processo e não substituem um broker compartilhado em uma implantação com várias instâncias.
 
 ## Testes
 

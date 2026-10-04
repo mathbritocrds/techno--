@@ -1,4 +1,4 @@
-import os, sqlite3, tempfile
+import base64, hashlib, hmac, os, sqlite3, struct, tempfile, time
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ["ADMIN_PASSWORD"] = "segredo-de-teste"
 
@@ -9,6 +9,13 @@ from app.main import app
 
 client = TestClient(app)
 SEDE = {"lat": -23.55, "lng": -46.63, "radius_m": 100}
+
+def totp_code(secret):
+    key = base64.b32decode(secret + "=" * (-len(secret) % 8))
+    digest = hmac.new(key, struct.pack(">Q", int(time.time() // 30)), hashlib.sha1).digest()
+    offset = digest[-1] & 15
+    value = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7fffffff
+    return f"{value % 1_000_000:06d}"
 
 def amostra(lat=-23.5501, lng=-46.6301, acc=10):
     return {"lat": lat, "lng": lng, "accuracy_m": acc}
@@ -75,6 +82,10 @@ def test_front_end_e_servido():
     assert "const formG=" in page and "Criar primeira conta da empresa" in page
     assert "Excluir remove o acesso e arquiva o cadastro" in page
     assert "Custeio mensal por setor" in page
+    assert "Composição do DRE" in page and "Alertas operacionais" in page
+    assert "atualização automática a cada 30 s" in page and "Estoque mínimo" in page
+    assert "Busca global (Ctrl+K)" in page and "/events" in page
+    assert "Autenticador de dois fatores" in page and "/service-worker.js" in page
     assert "/ai/fill-mask" not in page
     assert "Resumir com IA" not in page and "finance/department-summary" not in page
 
@@ -263,9 +274,10 @@ def test_logout_invalida_sessao(auth):
 
 
 def test_materia_departamentos_espacos_e_dre(auth):
-    mid = client.post("/materials", json={"name": "Aço", "unit": "kg", "stock": 10, "unit_cost": 12.5}, headers=auth).json()["id"]
+    mid = client.post("/materials", json={"name": "Aço", "unit": "kg", "stock": 10, "unit_cost": 12.5,
+                                         "minimum_stock": 12}, headers=auth).json()["id"]
     mats = client.get("/materials", headers=auth).json()
-    assert mats[0]["value"] == 125
+    assert mats[0]["value"] == 125 and mats[0]["minimum_stock"] == 12
     did = client.post("/departments", json={"name": "Produção", "lead": "Ana"}, headers=auth).json()["id"]
     assert client.get("/departments", headers=auth).json()[0]["name"] == "Produção"
     sid = client.post("/spaces", json={"name": "People Core", "kind": "pessoas", "admin_email": "gestor@empresa.com"}, headers=auth).json()["id"]
@@ -287,7 +299,7 @@ def test_materia_departamentos_espacos_e_dre(auth):
 
 
 def test_dashboard_conta_funcionarios_com_ponto_aberto(auth):
-    before = client.get("/dashboard", headers=auth).json()["present_now"]
+    before = client.get("/dashboard", headers=auth).json()
     employee_id = client.post(
         "/employees",
         json={"name": "Presente", "salary": 0, "pin": "5678"},
@@ -296,10 +308,132 @@ def test_dashboard_conta_funcionarios_com_ponto_aberto(auth):
     with main.db() as c:
         c.execute(
             "INSERT INTO time_entries(employee_id,kind,at,accepted) VALUES(?,?,?,1)",
-            (employee_id, "entrada", main.iso(main.utcnow())),
+            (employee_id, "entrada", main.iso(main.utcnow() - main.timedelta(hours=3))),
         )
 
     response = client.get("/dashboard", headers=auth)
 
     assert response.status_code == 200
-    assert response.json()["present_now"] == before + 1
+    assert response.json()["present_now"] == before["present_now"] + 1
+    assert response.json()["hours_worked"] >= before["hours_worked"] + 2.9
+
+
+def test_dashboard_indicadores_series_e_alertas(auth):
+    client.post("/materials", json={"name": "Estoque baixo", "unit": "un", "stock": 4,
+                                    "minimum_stock": 8}, headers=auth)
+    client.post("/materials", json={"name": "Estoque zerado", "unit": "kg", "stock": 0},
+                headers=auth)
+    due = (main.local(main.utcnow()).date() - main.timedelta(days=1)).isoformat()
+    client.post("/tasks", json={"title": "Ordem atrasada", "status": 1, "severity": "critico",
+                                "due": due}, headers=auth)
+    employee_id = client.post(
+        "/employees",
+        json={"name": "Jornada longa", "salary": 0, "pin": "9876"},
+        headers=auth,
+    ).json()["id"]
+    start = main.local(main.utcnow()).replace(hour=6, minute=0, second=0, microsecond=0)
+    end = start + main.timedelta(hours=18)
+    with main.db() as c:
+        c.execute(
+            "INSERT INTO time_entries(employee_id,kind,at,accepted) VALUES(?,?,?,1)",
+            (employee_id, "entrada", main.iso(start)),
+        )
+        c.execute(
+            "INSERT INTO time_entries(employee_id,kind,at,accepted) VALUES(?,?,?,1)",
+            (employee_id, "saida", main.iso(end)),
+        )
+
+    response = client.get("/dashboard", headers=auth)
+    dashboard = response.json()
+    alerts = dashboard["alerts"]
+
+    assert response.status_code == 200
+    assert len(dashboard["attendance_series"]) == 14
+    assert dashboard["hours_worked"] >= 18
+    assert any("Estoque baixo" in alert["title"] for alert in alerts)
+    assert any("Estoque zerado" in alert["title"] for alert in alerts)
+    assert any("Ordem atrasada" in alert["title"] for alert in alerts)
+    assert any("Jornada longa" in alert["title"] for alert in alerts)
+    assert dashboard["overtime_threshold_hours"] == 8
+    assert dashboard["updated_at"]
+
+
+def test_manager_so_pode_acessar_quadro_e_aprovar(auth):
+    account = client.post(
+        "/auth/register",
+        json={"email": "gestor-quadro@flux.test", "password": "senha-gestor-segura",
+              "company_name": "Flux Ltda", "cnpj": "12345678000199", "role": "manager"},
+        headers=auth,
+    )
+    assert account.status_code == 201
+    login = client.post("/auth/login", json={"email": "gestor-quadro@flux.test",
+                                             "password": "senha-gestor-segura"}).json()
+    manager_headers = {"Authorization": "Bearer " + login["token"]}
+    task_id = client.post("/tasks", json={"title": "Aprovação pelo gestor"}, headers=auth).json()["id"]
+
+    assert login["role"] == "manager"
+    assert client.get("/tasks", headers=manager_headers).status_code == 200
+    assert client.get("/dashboard", headers=manager_headers).status_code == 401
+    assert client.get("/finance", headers=manager_headers).status_code == 401
+    approval = client.post(f"/tasks/{task_id}/approval", json={"decision": "aprovado"},
+                           headers=manager_headers)
+    assert approval.status_code == 200 and approval.json()["approval"] == "aprovado"
+    assert client.post(f"/tasks/{task_id}/approval", json={"decision": "recusado"},
+                       headers=manager_headers).status_code == 409
+    with main.db() as c:
+        c.execute('UPDATE admins SET role=\'operator\' WHERE "user"=?', ("gestor-quadro@flux.test",))
+    assert client.get("/tasks", headers=manager_headers).status_code == 401
+    with main.db() as c:
+        c.execute('UPDATE admins SET role=\'manager\' WHERE "user"=?', ("gestor-quadro@flux.test",))
+
+
+def test_totp_exige_codigo_no_login(auth):
+    setup = client.post("/auth/2fa/setup", headers=auth).json()
+    code = totp_code(setup["secret"])
+    assert client.post("/auth/2fa/enable", json={"code": code}, headers=auth).json()["enabled"]
+    credentials = {"email": "admin@flux.test", "password": "segredo-de-teste"}
+    assert client.post("/auth/login", json=credentials).json() == {"requires_otp": True}
+    login = client.post("/auth/login", json={**credentials, "totp_code": totp_code(setup["secret"])})
+    assert login.status_code == 200 and login.json()["role"] == "admin"
+    headers = {"Authorization": "Bearer " + login.json()["token"]}
+    assert client.post("/auth/2fa/disable", json={"code": totp_code(setup["secret"])},
+                       headers=headers).json()["enabled"] is False
+
+
+def test_auditoria_busca_e_evento_em_tempo_real(auth):
+    task_id = client.post("/tasks", json={"title": "Item localizado na busca"}, headers=auth).json()["id"]
+    matches = client.get("/search", params={"q": "localizado"}, headers=auth).json()
+    assert any(item["kind"] == "task" and item["id"] == task_id for item in matches)
+    audit = client.get("/audit?limit=25", headers=auth)
+    assert audit.status_code == 200
+    assert any(item["action"] == "POST" and item["resource"] == "/tasks"
+               and item["actor"] == "admin@flux.test" for item in audit.json())
+
+    token = auth["Authorization"].removeprefix("Bearer ")
+    with client.websocket_connect("/events") as socket:
+        socket.send_json({"token": token})
+        assert socket.receive_json() == {"type": "connected"}
+        client.post("/tasks", json={"title": "Evento ao vivo"}, headers=auth)
+        assert socket.receive_json() == {"type": "change", "resource": "/tasks"}
+
+
+def test_canal_email_nao_envia_sem_smtp_configurado(auth, monkeypatch):
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    created = client.post("/notification-channels",
+                          json={"kind": "email", "recipient": "ops@flux.test"}, headers=auth)
+    assert created.status_code == 201
+    response = client.post("/notifications/test", json={"message": "Teste"}, headers=auth)
+    assert response.status_code == 503 and "SMTP_HOST" in response.json()["detail"]
+
+
+def test_alertas_criticos_disparam_notificacoes(auth, monkeypatch):
+    delivered = []
+    monkeypatch.setattr(main, "dispatch_notifications", delivered.append)
+
+    task = client.post("/tasks", json={"title": "Ordem crítica", "severity": "critico"}, headers=auth)
+    material = client.post("/materials", json={"name": "Peça crítica", "stock": 1,
+                                               "minimum_stock": 3}, headers=auth)
+
+    assert task.status_code == material.status_code == 201
+    assert any("Ordem crítica" in message for message in delivered)
+    assert any("Peça crítica" in message for message in delivered)

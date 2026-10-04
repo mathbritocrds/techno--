@@ -3,19 +3,22 @@ Rodar (na raiz do repositório):  uvicorn app.main:app --reload
 Docs:   http://localhost:8000/docs
 """
 import csv, hashlib, hmac, io, math, os, secrets, sqlite3, time
+import asyncio, json
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.request import Request, urlopen
 
 import psycopg2
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import connect_postgres
+from app.security import generate_totp_secret, provisioning_uri, verify_totp
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.abspath(os.getenv("DB_PATH") or os.path.join(APP_DIR, "..", "data", "flux.db"))
@@ -32,7 +35,9 @@ DAILY_HOURS = 8
 OVERTIME_RATE = 1.5       # hora extra a 50% (estimativa)
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS admins(user TEXT PRIMARY KEY, salt TEXT, hash TEXT);
+CREATE TABLE IF NOT EXISTS admins(
+  user TEXT PRIMARY KEY, salt TEXT, hash TEXT, role TEXT NOT NULL DEFAULT 'admin',
+  department_id INTEGER, totp_secret TEXT, totp_enabled INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user TEXT, expires REAL,
     role TEXT NOT NULL DEFAULT 'admin', subject_id INTEGER);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
@@ -60,7 +65,8 @@ CREATE TABLE IF NOT EXISTS transactions(
     department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS materials(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, unit TEXT DEFAULT 'un',
-  stock REAL NOT NULL DEFAULT 0, unit_cost REAL NOT NULL DEFAULT 0);
+  stock REAL NOT NULL DEFAULT 0, unit_cost REAL NOT NULL DEFAULT 0,
+  minimum_stock REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS departments(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, lead TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS spaces(
@@ -72,6 +78,13 @@ CREATE TABLE IF NOT EXISTS cost_analyses(
 CREATE TABLE IF NOT EXISTS integrations(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
   endpoint TEXT DEFAULT '', active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS audit_log(
+  id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, resource TEXT NOT NULL,
+  status INTEGER NOT NULL, ip TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS notification_channels(
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL, recipient TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, scope TEXT NOT NULL CHECK(scope IN ('team','private')),
     employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
@@ -93,6 +106,11 @@ MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
               "ALTER TABLE time_entries ADD COLUMN samples INTEGER DEFAULT 1",
               "ALTER TABLE time_entries ADD COLUMN spread_m REAL DEFAULT 0",
               "ALTER TABLE employees ADD COLUMN department_id INTEGER",
+              "ALTER TABLE materials ADD COLUMN minimum_stock REAL NOT NULL DEFAULT 0",
+              "ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'",
+              "ALTER TABLE admins ADD COLUMN department_id INTEGER",
+              "ALTER TABLE admins ADD COLUMN totp_secret TEXT",
+              "ALTER TABLE admins ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
               "ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'media'",
               "ALTER TABLE tasks ADD COLUMN progress INTEGER DEFAULT 0",
               "ALTER TABLE tasks ADD COLUMN approval TEXT DEFAULT 'pendente'",
@@ -156,13 +174,53 @@ def haversine(a, b, c, d):
 def settings(c): return {r["k"]: r["v"] for r in c.execute("SELECT k,v FROM settings")}
 def workplace_of(s): return {k: float(s[k]) for k in ("lat", "lng", "radius_m")} if "lat" in s else None
 
+class LiveClients:
+    def __init__(self):
+        self.clients = set()
+
+    async def broadcast(self, event):
+        stale = set()
+        for client in tuple(self.clients):
+            try:
+                await client.send_json(event)
+            except WebSocketDisconnect:
+                stale.add(client)
+        self.clients.difference_update(stale)
+
+live_clients = LiveClients()
+
+@app.middleware("http")
+async def audit_mutations(request, call_next):
+    token = request.headers.get("authorization", "")
+    actor, role = "", ""
+    if token.startswith("Bearer "):
+        token_hash = hashlib.sha256(token[7:].encode()).hexdigest()
+        with db() as c:
+            session = c.execute('SELECT "user",role FROM sessions WHERE token=? AND expires>?',
+                                (token_hash, time.time())).fetchone()
+            if session:
+                actor, role = session["user"], session["role"]
+    response = await call_next(request)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {
+        "/auth/login", "/auth/employee/login", "/auth/register", "/auth/logout",
+    }:
+        with db() as c:
+            c.execute(
+                "INSERT INTO audit_log(at,actor,role,action,resource,status,ip) VALUES(?,?,?,?,?,?,?)",
+                (iso(utcnow()), actor, role, request.method, request.url.path, response.status_code,
+                 request.client.host if request.client else ""),
+            )
+        if response.status_code < 400:
+            await live_clients.broadcast({"type": "change", "resource": request.url.path})
+    return response
+
 def admin(authorization: str = Header(default=""), x_admin_token: str = Header(default="")):
     if authorization.startswith("Bearer "):
         h = hashlib.sha256(authorization[7:].encode()).hexdigest()
         with db() as c:
             r = c.execute('SELECT "user",expires,role FROM sessions WHERE token=?', (h,)).fetchone()
-            account = c.execute('SELECT 1 FROM admins WHERE "user"=?', (r["user"],)).fetchone() if r else None
-        if r and r["expires"] > time.time() and r["role"] == "admin" and account:
+            account = c.execute('SELECT role FROM admins WHERE "user"=?', (r["user"],)).fetchone() if r else None
+        if r and r["expires"] > time.time() and r["role"] == "admin" and account and account["role"] == "admin":
             return
     if x_admin_token and hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
         return
@@ -175,12 +233,15 @@ class Login(BaseModel):
     password: str
     user: str = ""
     email: str = ""
+    totp_code: str = ""
 
 class Registration(BaseModel):
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=8, max_length=128)
     company_name: str = Field(min_length=2, max_length=160)
     cnpj: str = Field(default="", pattern=r"^(\d{14})?$")
+    role: Literal["manager", "operator"] = "manager"
+    department_id: Optional[int] = None
 
 def session_user(c, authorization, now):
     if not authorization.startswith("Bearer "):
@@ -189,9 +250,11 @@ def session_user(c, authorization, now):
     session = c.execute('SELECT "user",expires,role FROM sessions WHERE token=?', (token_hash,)).fetchone()
     if not session or session["expires"] <= now or session["role"] != "admin":
         return None
-    return session["user"] if c.execute('SELECT 1 FROM admins WHERE "user"=?', (session["user"],)).fetchone() else None
+    account = c.execute('SELECT role FROM admins WHERE "user"=?', (session["user"],)).fetchone()
+    return session["user"] if account and account["role"] == "admin" else None
 
-def principal(authorization: str = Header(default="")):
+def principal_for_token(token: str):
+    authorization = "Bearer " + token
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
     token_hash = hashlib.sha256(authorization[7:].encode()).hexdigest()
@@ -199,15 +262,28 @@ def principal(authorization: str = Header(default="")):
         session = c.execute('SELECT "user",expires,role,subject_id FROM sessions WHERE token=?', (token_hash,)).fetchone()
         if not session or session["expires"] <= time.time():
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
-        if session["role"] == "admin":
-            if not c.execute('SELECT 1 FROM admins WHERE "user"=?', (session["user"],)).fetchone():
+        if session["role"] in ("admin", "manager", "operator"):
+            account = c.execute('SELECT role,department_id FROM admins WHERE "user"=?',
+                                (session["user"],)).fetchone()
+            if not account or account["role"] != session["role"]:
                 raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
-            return {"role": "admin", "user": session["user"], "employee_id": None}
+            return {"role": account["role"], "user": session["user"], "employee_id": None,
+                    "department_id": account["department_id"]}
         employee = c.execute("SELECT id,name FROM employees WHERE id=? AND lower(account_email)=lower(?) AND active=1",
                              (session["subject_id"], session["user"])).fetchone()
         if not employee:
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
         return {"role": "employee", "user": session["user"], "employee_id": employee["id"], "name": employee["name"]}
+
+def principal(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
+    return principal_for_token(authorization[7:])
+
+def manager_or_admin(who: dict = Depends(principal)):
+    if who["role"] not in ("admin", "manager", "operator"):
+        raise HTTPException(403, "Este recurso exige permissão de gestor.")
+    return who
 
 @app.get("/auth/status")
 def auth_status():
@@ -232,9 +308,15 @@ def register_account(b: Registration, authorization: str = Header(default="")):
         if company_name and (company_name.casefold() != b.company_name.strip().casefold()
                              or company_cnpj != b.cnpj):
             raise HTTPException(409, "Esta instalação já pertence a outra empresa.")
+        role = "admin" if not account_exists else b.role
+        department_id = b.department_id if role == "manager" else None
+        if department_id is not None and not c.execute(
+            "SELECT 1 FROM departments WHERE id=?", (department_id,)
+        ).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
         salt = secrets.token_hex(16)
-        c.execute('INSERT INTO admins("user",salt,hash) VALUES(?,?,?)',
-                  (email, salt, hash_pin(b.password, salt)))
+        c.execute('INSERT INTO admins("user",salt,hash,role,department_id) VALUES(?,?,?,?,?)',
+                  (email, salt, hash_pin(b.password, salt), role, department_id))
         if not company_name:
             c.execute("INSERT INTO settings(k,v) VALUES('co_name',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                       (b.company_name.strip(),))
@@ -245,7 +327,7 @@ def register_account(b: Registration, authorization: str = Header(default="")):
             token = secrets.token_urlsafe(32)
             c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,\'admin\')',
                       (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600))
-    return {"email": email, "token": token}
+    return {"email": email, "token": token, "role": role}
 
 @app.post("/auth/login")
 def login(b: Login):
@@ -258,12 +340,18 @@ def login(b: Login):
         if not a or not hmac.compare_digest(hash_pin(b.password, a["salt"]), a["hash"]):
             _fails[k] = ((n if now - t < 300 else 0) + 1, now)
             raise HTTPException(401, "Usuário ou senha incorretos.")
+        if a["totp_enabled"]:
+            if not b.totp_code:
+                return {"requires_otp": True}
+            if not verify_totp(a["totp_secret"], b.totp_code):
+                _fails[k] = ((n if now - t < 300 else 0) + 1, now)
+                raise HTTPException(401, "Código autenticador inválido.")
         _fails.pop(k, None)
         tok = secrets.token_urlsafe(32)
         c.execute("DELETE FROM sessions WHERE expires<?", (now,))
-        c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,\'admin\')',
-                  (hashlib.sha256(tok.encode()).hexdigest(), k, now + SESSION_HOURS * 3600))
-    return {"token": tok, "user": k}
+        c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,?)',
+                  (hashlib.sha256(tok.encode()).hexdigest(), k, now + SESSION_HOURS * 3600, a["role"]))
+    return {"token": tok, "user": k, "role": a["role"]}
 
 @app.post("/auth/employee/login")
 def employee_login(b: Login):
@@ -289,6 +377,121 @@ def logout(authorization: str = Header(default="")):
     with db() as c:
         c.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(authorization[7:].encode()).hexdigest(),))
     return {"ok": True}
+
+class TotpCode(BaseModel):
+    code: str = Field(pattern=r"^\d{6}$")
+
+@app.get("/auth/2fa")
+def get_totp_status(who=Depends(principal)):
+    if who["role"] not in ("admin", "manager", "operator"):
+        raise HTTPException(403, "2FA disponível para contas de gestão.")
+    with db() as c:
+        row = c.execute('SELECT totp_enabled FROM admins WHERE "user"=?', (who["user"],)).fetchone()
+    return {"enabled": bool(row["totp_enabled"])}
+
+@app.post("/auth/2fa/setup")
+def setup_totp(who=Depends(principal)):
+    if who["role"] not in ("admin", "manager", "operator"):
+        raise HTTPException(403, "2FA disponível para contas de gestão.")
+    secret = generate_totp_secret()
+    with db() as c:
+        c.execute('UPDATE admins SET totp_secret=?,totp_enabled=0 WHERE "user"=?', (secret, who["user"]))
+    return {"secret": secret, "otpauth_url": provisioning_uri(secret, who["user"])}
+
+@app.post("/auth/2fa/enable")
+def enable_totp(b: TotpCode, who=Depends(principal)):
+    with db() as c:
+        row = c.execute('SELECT totp_secret FROM admins WHERE "user"=?', (who["user"],)).fetchone()
+        if not row or not verify_totp(row["totp_secret"], b.code):
+            raise HTTPException(400, "Código autenticador inválido.")
+        c.execute('UPDATE admins SET totp_enabled=1 WHERE "user"=?', (who["user"],))
+    return {"enabled": True}
+
+@app.post("/auth/2fa/disable")
+def disable_totp(b: TotpCode, who=Depends(principal)):
+    with db() as c:
+        row = c.execute('SELECT totp_secret FROM admins WHERE "user"=?', (who["user"],)).fetchone()
+        if not row or not verify_totp(row["totp_secret"], b.code):
+            raise HTTPException(400, "Código autenticador inválido.")
+        c.execute('UPDATE admins SET totp_secret=NULL,totp_enabled=0 WHERE "user"=?', (who["user"],))
+    return {"enabled": False}
+
+class RoleChange(BaseModel):
+    role: Literal["manager", "operator"]
+    department_id: Optional[int] = None
+
+@app.get("/team/accounts", dependencies=[Depends(admin)])
+def list_team_accounts():
+    with db() as c:
+        return rows(c.execute('SELECT a."user",a.role,a.department_id,d.name AS department '
+                              'FROM admins a LEFT JOIN departments d ON d.id=a.department_id ORDER BY a."user"'))
+
+@app.patch("/team/accounts/{email}", dependencies=[Depends(admin)])
+def change_team_account(email: str, change: RoleChange):
+    department_id = change.department_id if change.role == "manager" else None
+    with db() as c:
+        if not c.execute('SELECT 1 FROM admins WHERE "user"=?', (email.lower(),)).fetchone():
+            raise HTTPException(404, "Conta não encontrada.")
+        if email.lower() == c.execute('SELECT "user" FROM admins WHERE role=\'admin\' ORDER BY "user" LIMIT 1').fetchone()["user"]:
+            raise HTTPException(400, "Não é possível alterar a conta principal.")
+        if department_id is not None and not c.execute("SELECT 1 FROM departments WHERE id=?", (department_id,)).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
+        c.execute('UPDATE admins SET role=?,department_id=? WHERE "user"=?',
+                  (change.role, department_id, email.lower()))
+        c.execute('DELETE FROM sessions WHERE "user"=?', (email.lower(),))
+    return {"ok": True}
+
+@app.get("/audit", dependencies=[Depends(admin)])
+def list_audit(limit: int = 100):
+    if not 1 <= limit <= 500:
+        raise HTTPException(400, "O limite deve estar entre 1 e 500.")
+    with db() as c:
+        return rows(c.execute("SELECT at,actor,role,action,resource,status,ip FROM audit_log "
+                              "ORDER BY id DESC LIMIT ?", (limit,)))
+
+@app.get("/search", dependencies=[Depends(manager_or_admin)])
+def global_search(q: str = "", who=Depends(manager_or_admin)):
+    query = q.strip()[:80]
+    if len(query) < 2:
+        return []
+    pattern = "%" + query.replace("%", "\\%").replace("_", "\\_") + "%"
+    with db() as c:
+        tasks = rows(c.execute("SELECT id,title,assignee,status FROM tasks WHERE title LIKE ? ESCAPE '\\' "
+                               "OR assignee LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 8", (pattern, pattern)))
+        products = rows(c.execute("SELECT id,name FROM products WHERE name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 8",
+                                  (pattern,))) if who["role"] == "admin" else []
+        employees = []
+        if who["role"] == "admin":
+            employees = rows(c.execute("SELECT id,name,role FROM employees WHERE active=1 AND "
+                                       "(name LIKE ? ESCAPE '\\' OR role LIKE ? ESCAPE '\\') ORDER BY name LIMIT 8",
+                                       (pattern, pattern)))
+    return ([{"kind": "task", **item} for item in tasks]
+            + [{"kind": "product", **item} for item in products]
+            + [{"kind": "employee", **item} for item in employees])[:20]
+
+@app.websocket("/events")
+async def event_stream(socket: WebSocket):
+    await socket.accept()
+    try:
+        credentials = await asyncio.wait_for(socket.receive_json(), timeout=10)
+        if not isinstance(credentials, dict):
+            await socket.close(code=1008)
+            return
+        token = credentials.get("token", "")
+        if not isinstance(token, str):
+            await socket.close(code=1008)
+            return
+        principal_for_token(token)
+        live_clients.clients.add(socket)
+        await socket.send_json({"type": "connected"})
+        while True:
+            await socket.receive_text()
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        pass
+    except HTTPException:
+        await socket.close(code=1008)
+    finally:
+        live_clients.clients.discard(socket)
 
 # ---------- Configurações: local de trabalho e empresa ----------
 class Workplace(BaseModel):
@@ -570,18 +773,41 @@ def norm_task(t: TaskIn):
     return t
 
 @app.post("/tasks", dependencies=[Depends(admin)], status_code=201)
-def add_task(t: TaskIn):
+def add_task(t: TaskIn, background: BackgroundTasks):
     t = norm_task(t)
     with db() as c:
         cur = c.execute("INSERT INTO tasks(title,assignee,due,status,priority,progress,approval,severity) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
                         (t.title, t.assignee, t.due, t.status, t.priority, t.progress, t.approval, t.severity))
         task_id = cur.fetchall()[0]["id"]
+    if t.status != 2 and (t.severity == "critico" or (t.due and t.due < local(utcnow()).date().isoformat())):
+        background.add_task(dispatch_notifications, f"Alerta SIGI: tarefa em risco — {t.title}.")
     return {"id": task_id}
 
-@app.get("/tasks", dependencies=[Depends(admin)])
+@app.get("/tasks", dependencies=[Depends(manager_or_admin)])
 def list_tasks():
     with db() as c:
         return rows(c.execute("SELECT * FROM tasks ORDER BY status, id"))
+
+class ApprovalIn(BaseModel):
+    decision: Literal["aprovado", "recusado"]
+
+@app.post("/tasks/{tid}/approval")
+def decide_task_approval(tid: int, decision: ApprovalIn,
+                         background: BackgroundTasks, who=Depends(manager_or_admin)):
+    if who["role"] not in ("admin", "manager"):
+        raise HTTPException(403, "Somente administradores e gestores podem aprovar tarefas.")
+    with db() as c:
+        task = c.execute("SELECT title FROM tasks WHERE id=?", (tid,)).fetchone()
+        if not task:
+            raise HTTPException(404, "Tarefa não encontrada.")
+        cur = c.execute("UPDATE tasks SET approval=? WHERE id=? AND approval='pendente'",
+                        (decision.decision, tid))
+        if not cur.rowcount:
+            raise HTTPException(409, "Esta tarefa não está aguardando aprovação.")
+        title = task["title"]
+    message = f"Tarefa {decision.decision}: {title} (por {who['user']})."
+    background.add_task(dispatch_notifications, message)
+    return {"ok": True, "approval": decision.decision}
 
 @app.patch("/tasks/{tid}/status/{status}", dependencies=[Depends(admin)])
 def move_task(tid: int, status: int):
@@ -733,17 +959,22 @@ def get_department_costs(month: Optional[str] = None):
 
 # ---------- Matéria-prima ----------
 class MaterialIn(BaseModel):
-    name: str; unit: str = "un"; stock: float = Field(default=0, ge=0); unit_cost: float = Field(default=0, ge=0)
+    name: str; unit: str = "un"; stock: float = Field(default=0, ge=0)
+    unit_cost: float = Field(default=0, ge=0); minimum_stock: float = Field(default=0, ge=0)
 
 def with_mat(m):
     return {**m, "value": round(m["stock"] * m["unit_cost"], 2)}
 
 @app.post("/materials", dependencies=[Depends(admin)], status_code=201)
-def add_material(m: MaterialIn):
+def add_material(m: MaterialIn, background: BackgroundTasks):
     with db() as c:
-        cur = c.execute("INSERT INTO materials(name,unit,stock,unit_cost) VALUES(?,?,?,?) RETURNING id",
-                        (m.name, m.unit, m.stock, m.unit_cost))
+        cur = c.execute("INSERT INTO materials(name,unit,stock,unit_cost,minimum_stock) VALUES(?,?,?,?,?) RETURNING id",
+                        (m.name, m.unit, m.stock, m.unit_cost, m.minimum_stock))
         material_id = cur.fetchall()[0]["id"]
+    if m.stock == 0 or (m.minimum_stock > 0 and m.stock <= m.minimum_stock):
+        background.add_task(dispatch_notifications,
+                            f"Alerta SIGI: estoque de {m.name} está em {m.stock:g} {m.unit}; "
+                            f"mínimo cadastrado {m.minimum_stock:g} {m.unit}.")
     return {"id": material_id}
 
 @app.get("/materials", dependencies=[Depends(admin)])
@@ -752,11 +983,19 @@ def list_materials():
         return [with_mat(m) for m in rows(c.execute("SELECT * FROM materials ORDER BY name"))]
 
 @app.put("/materials/{mid}", dependencies=[Depends(admin)])
-def edit_material(mid: int, m: MaterialIn):
+def edit_material(mid: int, m: MaterialIn, background: BackgroundTasks):
     with db() as c:
-        cur = c.execute("UPDATE materials SET name=?,unit=?,stock=?,unit_cost=? WHERE id=?",
-                        (m.name, m.unit, m.stock, m.unit_cost, mid))
-        if not cur.rowcount: raise HTTPException(404, "Material não encontrado.")
+        old = c.execute("SELECT stock,minimum_stock,name,unit FROM materials WHERE id=?", (mid,)).fetchone()
+        if not old:
+            raise HTTPException(404, "Material não encontrado.")
+        cur = c.execute("UPDATE materials SET name=?,unit=?,stock=?,unit_cost=?,minimum_stock=? WHERE id=?",
+                        (m.name, m.unit, m.stock, m.unit_cost, m.minimum_stock, mid))
+    was_low = old["stock"] == 0 or (old["minimum_stock"] > 0 and old["stock"] <= old["minimum_stock"])
+    is_low = m.stock == 0 or (m.minimum_stock > 0 and m.stock <= m.minimum_stock)
+    if is_low and (not was_low or m.name != old["name"]):
+        background.add_task(dispatch_notifications,
+                            f"Alerta SIGI: estoque de {m.name} está em {m.stock:g} {m.unit}; "
+                            f"mínimo cadastrado {m.minimum_stock:g} {m.unit}.")
     return {"ok": True}
 
 @app.delete("/materials/{mid}", dependencies=[Depends(admin)])
@@ -915,6 +1154,89 @@ def delete_integration(iid: int):
     with db() as c: c.execute("DELETE FROM integrations WHERE id=?", (iid,))
     return {"ok": True}
 
+class NotificationChannelIn(BaseModel):
+    kind: Literal["email", "whatsapp"]
+    recipient: str = Field(min_length=3, max_length=254)
+
+def send_notification(channel, message):
+    if channel["kind"] == "email":
+        import smtplib
+        from email.message import EmailMessage
+
+        host, username, password = (os.getenv(name, "").strip() for name in
+                                    ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD"))
+        sender = os.getenv("SMTP_FROM", username).strip()
+        if not host or not username or not password or not sender:
+            raise HTTPException(503, "Configure SMTP_HOST, SMTP_USER, SMTP_PASSWORD e SMTP_FROM no ambiente.")
+        email = EmailMessage()
+        email["Subject"] = "Aviso operacional SIGI"
+        email["From"] = sender
+        email["To"] = channel["recipient"]
+        email.set_content(message)
+        with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=8) as smtp:
+            smtp.starttls()
+            smtp.login(username, password)
+            smtp.send_message(email)
+    else:
+        token = os.getenv("WHATSAPP_TOKEN", "").strip()
+        phone_id = os.getenv("WHATSAPP_PHONE_ID", "").strip()
+        if not token or not phone_id:
+            raise HTTPException(503, "Configure WHATSAPP_TOKEN e WHATSAPP_PHONE_ID no ambiente.")
+        endpoint = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
+        body = json.dumps({"messaging_product": "whatsapp", "to": channel["recipient"],
+                           "type": "text", "text": {"body": message}}).encode()
+        request = Request(endpoint, data=body, headers={
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json",
+        })
+        with urlopen(request, timeout=8) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"WhatsApp respondeu com HTTP {response.status}.")
+
+def dispatch_notifications(message):
+    with db() as c:
+        channels = rows(c.execute("SELECT kind,recipient FROM notification_channels WHERE active=1"))
+    for channel in channels:
+        send_notification(channel, message)
+
+@app.get("/notification-channels", dependencies=[Depends(admin)])
+def list_notification_channels():
+    with db() as c:
+        return rows(c.execute("SELECT id,kind,recipient,active FROM notification_channels ORDER BY id"))
+
+@app.post("/notification-channels", dependencies=[Depends(admin)], status_code=201)
+def add_notification_channel(channel: NotificationChannelIn):
+    recipient = channel.recipient.strip()
+    if channel.kind == "email" and ("@" not in recipient or "." not in recipient.rsplit("@", 1)[-1]):
+        raise HTTPException(400, "Informe um endereço de e-mail válido.")
+    if channel.kind == "whatsapp" and not recipient.lstrip("+").isdigit():
+        raise HTTPException(400, "Informe o telefone WhatsApp com código do país.")
+    with db() as c:
+        cur = c.execute("INSERT INTO notification_channels(kind,recipient,active) VALUES(?,?,1) RETURNING id",
+                        (channel.kind, recipient))
+        channel_id = cur.fetchall()[0]["id"]
+    return {"id": channel_id}
+
+@app.delete("/notification-channels/{channel_id}", dependencies=[Depends(admin)])
+def delete_notification_channel(channel_id: int):
+    with db() as c:
+        cur = c.execute("DELETE FROM notification_channels WHERE id=?", (channel_id,))
+        if not cur.rowcount:
+            raise HTTPException(404, "Canal de notificação não encontrado.")
+    return {"ok": True}
+
+class NotificationTest(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
+
+@app.post("/notifications/test", dependencies=[Depends(admin)])
+def test_notifications(payload: NotificationTest):
+    with db() as c:
+        channels = rows(c.execute("SELECT kind,recipient FROM notification_channels WHERE active=1"))
+    if not channels:
+        raise HTTPException(400, "Cadastre um canal de notificação antes de enviar.")
+    for channel in channels:
+        send_notification(channel, payload.message)
+    return {"sent": len(channels)}
+
 # ---------- Ponto com localização em tempo real ----------
 @app.get("/clock/employees")
 def clock_employees():
@@ -1059,31 +1381,92 @@ def export_entries(month: Optional[str] = None):
 def dashboard():
     now = utcnow(); today = local(now).date()
     days = [today - timedelta(days=i) for i in range(13, -1, -1)]
+    month = local(now).strftime("%Y-%m")
     with db() as c:
         a, z = day_range(today)
         present = c.execute("""SELECT COUNT(*) FROM (SELECT employee_id FROM time_entries
             WHERE accepted=1 AND at>=? AND at<? GROUP BY employee_id HAVING (COUNT(*) & 1)=1) AS present_employees""",
                             (a, z)).fetchone()[0]
         tasks = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM tasks GROUP BY status")}
+        task_rows = rows(c.execute("SELECT id,title,assignee,due,status,severity FROM tasks ORDER BY id DESC"))
         prods = [with_costs(p) for p in rows(c.execute("SELECT * FROM products"))]
         emps = rows(c.execute("SELECT * FROM employees WHERE active=1"))
-        att = [c.execute("SELECT COUNT(DISTINCT employee_id) FROM time_entries WHERE accepted=1 AND at>=? AND at<?",
-                         day_range(d)).fetchone()[0] for d in days]
+        attendance_series = []
+        for day in days:
+            start, end = day_range(day)
+            count = c.execute("SELECT COUNT(DISTINCT employee_id) FROM time_entries "
+                              "WHERE accepted=1 AND at>=? AND at<?", (start, end)).fetchone()[0]
+            attendance_series.append({"date": day.isoformat(), "employees": count})
+        att = [day["employees"] for day in attendance_series]
         recent = rows(c.execute("""SELECT t.at,t.kind,t.distance_m,t.accepted,t.reason,e.name FROM time_entries t
             JOIN employees e ON e.id=t.employee_id ORDER BY t.id DESC LIMIT 6"""))
         wp = "lat" in settings(c)
         dre = dre_of(c)
         lots = rows(c.execute("SELECT * FROM tasks ORDER BY id DESC LIMIT 8"))
+        materials = rows(c.execute("SELECT id,name,stock,unit,minimum_stock FROM materials ORDER BY name"))
+        month_hours = timesheet_data(c, month)
         n_mat = c.execute("SELECT COUNT(*) FROM materials").fetchone()[0]
         n_dep = c.execute("SELECT COUNT(*) FROM departments").fetchone()[0]
         n_sp = c.execute("SELECT COUNT(*) FROM spaces").fetchone()[0]
+    employee_overtime = {}
+    hours_worked = overtime_hours = 0
+    for employee in emps:
+        record = month_hours.get(employee["id"], {"days": {}, "total": 0, "overtime": 0, "open": None})
+        worked = record["total"]
+        overtime = record["overtime"]
+        if record["open"]:
+            elapsed = max(0, (now - record["open"]).total_seconds() / 3600)
+            worked += elapsed
+            today_key = local(record["open"]).date().isoformat()
+            completed_today = record["days"].get(today_key, 0)
+            overtime += max(0, completed_today + elapsed - DAILY_HOURS) - max(0, completed_today - DAILY_HOURS)
+        hours_worked += worked
+        overtime_hours += overtime
+        employee_overtime[employee["id"]] = overtime
+    alerts = []
+    for material in materials:
+        if material["stock"] <= 0:
+            alerts.append({"severity": "critico", "title": f"Estoque zerado: {material['name']}",
+                           "detail": f"Sem saldo disponível. Mínimo cadastrado: {material['minimum_stock']:g} {material['unit']}.",
+                           "tab": "materia"})
+        elif material["minimum_stock"] > 0 and material["stock"] <= material["minimum_stock"]:
+            alerts.append({"severity": "atencao", "title": f"Estoque abaixo do mínimo: {material['name']}",
+                           "detail": f"{material['stock']:g} {material['unit']} disponíveis; mínimo de "
+                                     f"{material['minimum_stock']:g} {material['unit']}.",
+                           "tab": "materia"})
+    for task in task_rows:
+        if task["status"] == 2:
+            continue
+        critical = task["severity"] == "critico"
+        overdue = bool(task["due"] and task["due"] < today.isoformat())
+        if critical or overdue:
+            reasons = []
+            if critical:
+                reasons.append("prioridade crítica")
+            if overdue:
+                reasons.append(f"prazo vencido em {task['due']}")
+            alerts.append({"severity": "critico" if critical else "atencao",
+                           "title": f"Tarefa em risco: {task['title']}",
+                           "detail": " · ".join(reasons), "tab": "quadros"})
+    for employee in emps:
+        overtime = employee_overtime[employee["id"]]
+        if overtime >= DAILY_HOURS:
+            alerts.append({"severity": "atencao", "title": f"Horas extras elevadas: {employee['name']}",
+                           "detail": f"{overtime:.1f} h extras neste mês (alerta a partir de {DAILY_HOURS} h).",
+                           "tab": "ponto"})
+    alerts.sort(key=lambda alert: (alert["severity"] != "critico", alert["title"]))
     gross = sum(e["salary"] for e in emps); ins = sum(inss(e["salary"]) for e in emps)
     ben = sum(e["benefits"] for e in emps); charges = gross * EMPLOYER_CHARGES
     return {"present_now": present, "employees_active": len(emps),
             "tasks": [tasks.get(i, 0) for i in range(3)],
             "avg_margin_pct": round(sum(p["margin_pct"] for p in prods) / len(prods), 1) if prods else 0,
             "margins": [{"name": p["name"], "pct": p["margin_pct"]} for p in prods],
-            "salaries": [e["salary"] for e in emps], "attendance_14d": att, "recent": recent,
+            "salaries": [e["salary"] for e in emps], "attendance_14d": att,
+            "attendance_series": attendance_series,
+            "hours_worked": round(hours_worked, 1),
+            "overtime_hours": round(overtime_hours, 1),
+            "overtime_threshold_hours": DAILY_HOURS, "current_month": month,
+            "alerts": alerts, "updated_at": iso(now), "recent": recent,
             "payroll": {"net": round(gross - ins + ben, 2), "inss": round(ins, 2), "charges": round(charges, 2),
                         "company_cost": round(gross + charges + ben, 2)},
             "setup": {"workplace": wp, "employees": bool(emps), "products": bool(prods), "tasks": bool(sum(tasks.values())),

@@ -2,6 +2,10 @@
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SIGI Gestão</title>
+<meta name="theme-color" content="#171D19">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <script>const systemTheme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';const root=document.documentElement;try{root.dataset.theme=localStorage.getItem('theme')||systemTheme;const motion=localStorage.getItem('motion');root.dataset.motion=motion==='full'||motion==='reduced'?motion:'system'}catch(e){root.dataset.theme=systemTheme;root.dataset.motion='system'}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Fraunces:wght@500;600&display=swap">
 <style>
@@ -76,6 +80,9 @@ h1{font:500 30px Fraunces,Georgia,serif;margin:22px 0 2px;letter-spacing:-.4px}
 .stack{display:flex;height:22px;border-radius:7px;overflow:hidden;margin:10px 0 8px;gap:2px}.stack i{display:block;min-width:2px}
 .leg{display:flex;flex-wrap:wrap;gap:6px 16px;color:var(--mute);font-size:12px}.leg b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px}
 .cost-chart{display:grid;gap:14px;margin-top:12px}.cost-row{display:grid;grid-template-columns:minmax(90px,150px) minmax(120px,1fr) minmax(95px,auto);align-items:center;gap:12px;animation:chartRowIn .55s var(--ease) both;animation-delay:calc(var(--chart-index,0)*90ms)}.cost-name{overflow-wrap:anywhere}.cost-track{height:18px;display:flex;background:var(--hair);border-radius:4px;overflow:hidden}.cost-track i{height:100%;min-width:0;transform-origin:left center;animation:chartGrow .85s var(--ease) both;animation-delay:calc(var(--chart-index,0)*90ms + 130ms)}.cost-track .paid{background:#70B88B}.cost-track .open{background:#E9C270}.cost-track .payroll{background:#91AFC7}.cost-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.ai-summary{white-space:pre-line;line-height:1.65;margin:0;color:var(--ink)}
+.dash-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-2px 0 14px;color:var(--mute);font-size:12px}.dash-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;margin-top:12px}.dash-bars{display:grid;gap:12px;margin-top:14px}.dash-bar-row{display:grid;grid-template-columns:minmax(90px,132px) minmax(60px,1fr) minmax(88px,auto);align-items:center;gap:10px;font-size:12px}.dash-bar-name{color:var(--mute)}.dash-track{height:12px;overflow:hidden;border-radius:99px;background:var(--hair)}.dash-track i{display:block;height:100%;width:var(--bar-width);min-width:2px;border-radius:inherit;background:var(--bar-color);transition:width .45s var(--ease)}.dash-bar-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.attendance-chart{display:grid;grid-template-columns:repeat(14,minmax(8px,1fr));align-items:end;gap:5px;height:128px;margin-top:14px;padding-top:8px;border-bottom:1px solid var(--hair)}.attendance-column{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;height:100%;min-width:0}.attendance-column i{display:block;width:min(100%,18px);height:var(--bar-height);min-height:3px;border-radius:5px 5px 2px 2px;background:var(--b);transition:height .4s var(--ease)}.attendance-column small{font-size:9px;color:var(--mute);white-space:nowrap}.dash-alerts{display:grid;gap:8px;margin-top:12px}.dash-alert{display:grid;grid-template-columns:9px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--inp);color:var(--ink);text-align:left;font:inherit;cursor:pointer;transition:border-color .2s,transform .2s}.dash-alert:hover{transform:translateY(-1px);border-color:var(--hair)}.dash-alert .dot{background:var(--o)}.dash-alert.critico .dot{background:var(--r)}.dash-alert strong{display:block;font-size:12px;font-weight:600}.dash-alert small{display:block;margin-top:2px;color:var(--mute);font-size:11px}.dash-alert-empty{padding:14px;border-radius:12px;background:rgba(91,155,119,.1);color:var(--g);font-size:13px}
+.search-overlay{position:fixed;inset:0;z-index:20;display:grid;align-items:start;justify-items:center;padding:12vh 14px 20px;background:rgba(15,22,18,.55);backdrop-filter:blur(5px)}.search-dialog{width:min(620px,100%);max-height:72vh;overflow:auto;padding:16px;border:1px solid var(--line);border-radius:18px;background:var(--card);box-shadow:0 24px 80px rgba(0,0,0,.24)}.search-results{display:grid;gap:6px;margin-top:12px}.search-result{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;min-height:46px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--inp);color:var(--ink);text-align:left;font:inherit;cursor:pointer}.search-result small{color:var(--mute)}.offline-indicator{font-size:11px;color:var(--mute)}
+@media(max-width:480px){.dash-toolbar{flex-wrap:wrap}.dash-charts{grid-template-columns:minmax(0,1fr)}.dash-bar-row{grid-template-columns:minmax(76px,92px) minmax(32px,1fr) minmax(76px,auto);gap:7px;font-size:11px}.dash-bar-value{font-size:11px}}
 @keyframes chartRowIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
 @keyframes chartGrow{from{transform:scaleX(.03);opacity:.45}to{transform:scaleX(1);opacity:1}}
 .gauge{display:block;margin:0 auto;max-width:210px;width:100%}
@@ -190,7 +197,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const wait=ms=>new Promise(r=>setTimeout(r,ms)),still=()=>{const mode=document.documentElement.dataset.motion;return mode==='reduced'||(mode!=='full'&&matchMedia('(prefers-reduced-motion: reduce)').matches)};
 let TOKEN=null,ROLE='admin',CURRENT_NAME='';try{TOKEN=sessionStorage.getItem('tk');ROLE=sessionStorage.getItem('role')||'admin';CURRENT_NAME=sessionStorage.getItem('name')||''}catch(e){}
 const S={tab:'painel',mode:'g',board:'kan',q:'',filt:'',messageTarget:'team'};let P=[];
-const fmt={R:v=>R(v),p:v=>Math.round(v)+'%',q:v=>(Math.round(v*10)/10).toLocaleString('pt-BR')+'%',i:v=>String(Math.round(v))};
+const fmt={R:v=>R(v),p:v=>Math.round(v)+'%',q:v=>(Math.round(v*10)/10).toLocaleString('pt-BR')+'%',i:v=>String(Math.round(v)),h:v=>(+v||0).toLocaleString('pt-BR',{maximumFractionDigits:1})};
 const cnt=(v,f)=>`<span class="cnt" data-v="${+v||0}" data-f="${f}">${fmt[f](+v||0)}</span>`;
 
 /* ---------- Utilidades de movimento ---------- */
@@ -211,14 +218,42 @@ function placePill(box,instant){const pill=box&&box.querySelector('.pill'),on=bo
 const placeAll=i=>document.querySelectorAll('.tabs,.seg').forEach(b=>placePill(b,i));
 addEventListener('resize',()=>placeAll(true));document.fonts&&document.fonts.ready.then(()=>placeAll(true));
 
+const offlineDB=()=>new Promise((resolve,reject)=>{const request=indexedDB.open('sigi-offline',1);request.onupgradeneeded=()=>{request.result.createObjectStore('responses',{keyPath:'key'});request.result.createObjectStore('outbox',{keyPath:'id',autoIncrement:true})};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)});
+async function offlineValue(store,mode,operation){const db=await offlineDB();return new Promise((resolve,reject)=>{const tx=db.transaction(store,mode),result=operation(tx.objectStore(store));tx.oncomplete=()=>{db.close();resolve(result)};tx.onerror=()=>{db.close();reject(tx.error)}})}
+const offlineOwner=()=>ROLE+':'+(CURRENT_NAME||'session');
+async function rememberOffline(path,value){await offlineValue('responses','readwrite',store=>store.put({key:offlineOwner()+':'+path,owner:offlineOwner(),path,value}))}
+async function cachedOffline(path){const db=await offlineDB();return new Promise((resolve,reject)=>{const tx=db.transaction('responses','readonly'),request=tx.objectStore('responses').get(offlineOwner()+':'+path);request.onsuccess=()=>{db.close();resolve(request.result?.value)};request.onerror=()=>{db.close();reject(request.error)}})}
+function isQueueable(path,method){return ['PUT','PATCH','DELETE'].includes(method)&&(/^\/tasks\/\d+(\/approval|\/status\/\d+)?$/.test(path)||/^\/materials\/\d+$/.test(path))}
 async function api(path,method='GET',body){
- const r=await fetch(path,{method,headers:{'Content-Type':'application/json',...(TOKEN?{Authorization:'Bearer '+TOKEN}:{})},body:body?JSON.stringify(body):undefined});
+ method=method.toUpperCase();
+ let r;
+ try{r=await fetch(path,{method,headers:{'Content-Type':'application/json',...(TOKEN?{Authorization:'Bearer '+TOKEN}:{})},body:body?JSON.stringify(body):undefined})}
+ catch(error){
+  if(method==='GET'&&['/tasks','/materials'].includes(path)){const cached=await cachedOffline(path);toast('Modo offline: exibindo dados sincronizados anteriormente.','w');return cached??[]}
+  if(isQueueable(path,method)){
+   await offlineValue('outbox','readwrite',store=>store.add({owner:offlineOwner(),path,method,body:body||null,createdAt:Date.now()}));
+   toast('Sem conexão: alteração guardada neste dispositivo e será sincronizada ao reconectar.','w');return {queued:true}
+  }
+  throw error
+ }
  const j=await r.json().catch(()=>({}));
  if(r.status==401&&TOKEN&&path!='/auth/login'){sair(true);throw new Error(j.detail||'Sessão expirada.')}
- if(!r.ok)throw new Error(Array.isArray(j.detail)?'Confira os dados informados.':(j.detail||'Erro inesperado.'));return j}
+ if(!r.ok)throw new Error(Array.isArray(j.detail)?'Confira os dados informados.':(j.detail||'Erro inesperado.'));
+ if(method==='GET'&&['/tasks','/materials'].includes(path))try{await rememberOffline(path,j)}catch(error){console.error('Não foi possível atualizar o cache offline:',error)}
+ return j}
+async function syncOfflineQueue(){if(!navigator.onLine||!TOKEN)return;const db=await offlineDB(),items=await new Promise((resolve,reject)=>{const tx=db.transaction('outbox','readonly'),request=tx.objectStore('outbox').getAll();request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)});db.close();let count=0;
+ for(const item of items.filter(entry=>entry.owner===offlineOwner()).sort((a,b)=>a.id-b.id)){
+  const response=await fetch(item.path,{method:item.method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+TOKEN},body:item.body?JSON.stringify(item.body):undefined});
+  let alreadyApplied=false;
+  if(response.status===409&&/\/tasks\/\d+\/approval$/.test(item.path)){const taskId=Number(item.path.split('/')[2]),tasks=await api('/tasks');alreadyApplied=tasks.some(task=>task.id===taskId&&task.approval===item.body?.decision)}
+  if(!response.ok&&!alreadyApplied){const detail=await response.json().catch(()=>({}));toast(`Sincronização interrompida: ${detail.detail||'a alteração foi recusada pelo servidor.'}`,'no');return}
+  await offlineValue('outbox','readwrite',store=>store.delete(item.id));count++
+ }
+ if(count){toast(`${count} alteração(ões) offline sincronizada(s).`,'ok');for(const path of ['/tasks','/materials'])await offlineValue('responses','readwrite',store=>store.delete(offlineOwner()+':'+path));if(S.tab==='quadros'||S.tab==='materia')refresh()}
+}
 const run=async(f,btn)=>{if(btn){if(btn.classList.contains('busy'))return;btn.classList.add('busy')}
  try{await f()}catch(e){toast(e.message,'no');if(btn&&btn.isConnected)shake(btn)}finally{if(btn&&btn.isConnected)btn.classList.remove('busy')}};
-function sair(local){if(!local)api('/auth/logout','POST').catch(()=>{});TOKEN=null;ROLE='admin';CURRENT_NAME='';try{sessionStorage.removeItem('tk');sessionStorage.removeItem('role');sessionStorage.removeItem('name')}catch(e){}tela()}
+function sair(local){stopDashboardRefresh();if(!local)api('/auth/logout','POST').catch(()=>{});TOKEN=null;ROLE='admin';CURRENT_NAME='';try{sessionStorage.removeItem('tk');sessionStorage.removeItem('role');sessionStorage.removeItem('name')}catch(e){}tela()}
 function pos(){return new Promise((ok,er)=>{if(!navigator.geolocation)return er(new Error('Seu navegador não tem localização.'));navigator.geolocation.getCurrentPosition(ok,()=>er(new Error('Ative o GPS e permita o acesso à localização.')),{enableHighAccuracy:true,timeout:15000})})}
 function themeButton(){const dark=document.documentElement.dataset.theme=='dark';return `<button class="chip ico theme-toggle" type="button" onclick="toggleTheme()" aria-label="Alternar tema claro ou escuro" aria-pressed="${dark}" title="Alternar tema">${dark?'☼':'☾'}</button>`}
 function syncThemeButtons(){document.querySelectorAll('.theme-toggle').forEach(button=>{const dark=document.documentElement.dataset.theme=='dark';button.textContent=dark?'☼':'☾';button.setAttribute('aria-pressed',String(dark))})}
@@ -264,7 +299,7 @@ async function startRegistration(){const status=await api('/auth/status');$('#se
  $('#lsub').textContent='A empresa já tem cadastro. Confirme uma conta de gestor para autorizar um novo acesso.';$('#lf').innerHTML=`<div class="grid g2"><div><label for="owner-email">E-mail do gestor</label><input id="owner-email" type="email" autocomplete="username"></div><div><label for="owner-password">Senha do gestor</label><input id="owner-password" type="password" autocomplete="current-password"></div><div><label for="rg">Novo e-mail de acesso</label><input id="rg" type="email" autocomplete="email"></div><div><label for="rp">Nova senha (mínimo 8 caracteres)</label><input id="rp" type="password" autocomplete="new-password" minlength="8"></div><div><label for="rc">Confirmar nova senha</label><input id="rc" type="password" autocomplete="new-password" minlength="8"></div></div><div class="row"><button class="btn" onclick="run(registerAuthorizedAccount,this)">Criar acesso à empresa</button><button class="chip" onclick="login()">Voltar ao login</button></div>`}
 async function registerAuthorizedAccount(){const ownerEmail=$('#owner-email').value.trim(),ownerPassword=$('#owner-password').value,email=$('#rg').value.trim().toLowerCase(),password=$('#rp').value,confirmation=$('#rc').value;if(password!==confirmation)throw new Error('As senhas da nova conta não coincidem.');if(password.length<8)throw new Error('A nova senha precisa ter pelo menos 8 caracteres.');const previousToken=TOKEN,owner=await api('/auth/login','POST',{email:ownerEmail,password:ownerPassword});TOKEN=owner.token;try{const company=await api('/settings/company');await api('/auth/register','POST',{email,password,company_name:company.name,cnpj:company.cnpj});$('#lf').innerHTML=`<div class="msg ok" role="status">Acesso criado para ${esc(email)}. Entre com esse e-mail e senha.</div><button class="btn l" onclick="login()">Voltar ao login</button>`;toast('Acesso criado.','ok')}finally{await api('/auth/logout','POST').catch(()=>{});TOKEN=previousToken}}
 async function registerAccount(initial){const email=$('#rg').value.trim().toLowerCase(),password=$('#rp').value,confirmation=$('#rc').value,company_name=$('#rco').value.trim(),cnpj=$('#rcnpj').value.trim();if(password!==confirmation)throw new Error('As senhas não coincidem.');if(password.length<8)throw new Error('A senha precisa ter pelo menos 8 caracteres.');if(!company_name)return toast('Informe a razão social.','no');const result=await api('/auth/register','POST',{email,password,company_name,cnpj});if(result.token){TOKEN=result.token;ROLE='admin';try{sessionStorage.setItem('tk',TOKEN);sessionStorage.setItem('role',ROLE)}catch(e){}S.tab='painel';await tela();return}$('#rp').value='';$('#rc').value='';$('#register-result').textContent=`Acesso criado para ${email}. A empresa e os dados do sistema continuam compartilhados nesta instalação.`;toast('Acesso criado.','ok')}
-async function entrar(){const j=await api(S.mode=='f'?'/auth/employee/login':'/auth/login','POST',{email:$('#lu').value,password:$('#ls').value});TOKEN=j.token;ROLE=j.role||'admin';CURRENT_NAME=j.name||j.user||'';try{sessionStorage.setItem('tk',TOKEN);sessionStorage.setItem('role',ROLE);sessionStorage.setItem('name',CURRENT_NAME)}catch(e){}S.tab=ROLE=='employee'?'mensagens':'painel';tela()}
+async function entrar(){const data={email:$('#lu').value,password:$('#ls').value,...($('#totp-code')?{totp_code:$('#totp-code').value.trim()}: {})},j=await api(S.mode=='f'?'/auth/employee/login':'/auth/login','POST',data);if(j.requires_otp){$('#lf').insertAdjacentHTML('beforeend','<label for="totp-code">Código do aplicativo autenticador</label><input id="totp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><p class="sub">Digite o código de 6 dígitos do seu autenticador e selecione Entrar.</p>');$('#totp-code').focus();return}TOKEN=j.token;ROLE=j.role||'admin';CURRENT_NAME=j.name||j.user||'';try{sessionStorage.setItem('tk',TOKEN);sessionStorage.setItem('role',ROLE);sessionStorage.setItem('name',CURRENT_NAME)}catch(e){}S.tab=ROLE=='employee'?'mensagens':ROLE=='admin'?'painel':'quadros';tela()}
 function lmsg(t,ok){const m=$('#lm');if(m)m.innerHTML=`<div class="msg in ${ok?'ok':'no'}">${esc(t)}</div>`}
 function startWatch(){if(W!=null)return;
  W=navigator.geolocation.watchPosition(p=>{const s={lat:p.coords.latitude,lng:p.coords.longitude,accuracy_m:p.coords.accuracy,ts_ms:p.timestamp};BUF.push(s);BUF=BUF.slice(-8);liveCheck(s)},
@@ -294,13 +329,26 @@ function comprovante(j){const c=j.comprovante,cpf=c.trabalhador.cpf,e=j.kind=='e
  <div class="card ticket" style="margin-top:12px"><h3>${esc(c.titulo)}</h3><div class="ln" style="--i:0">${esc(c.empresa.nome||'Empresa não informada')}${c.empresa.cnpj?' · CNPJ '+esc(c.empresa.cnpj):''}</div><div class="ln" style="--i:1">${esc(c.trabalhador.nome)}${cpf?' · CPF ***'+esc(cpf.slice(3,9))+'**':''}</div><div class="ln" style="--i:2">NSR ${c.nsr} · ${new Date(c.data_hora).toLocaleString('pt-BR')}</div><div class="ln" style="--i:3"><small style="word-break:break-all;color:var(--mute)">SHA-256 ${esc(c.hash_sha256)}</small></div><div class="row noprint"><button class="btn" onclick="window.print()">Imprimir comprovante</button><button class="chip" onclick="login()">Novo registro</button></div></div>`}
 
 /* ---------- App do gestor: navegação com transições ---------- */
-const tabs=[['painel','Painel'],['mensagens','Mensagens'],['quadros','Quadros'],['custeio','Custeio'],['materia','Matéria'],['paineis','Painéis'],['folha','Folha'],['financeiro','Financeiro'],['departamentos','Depts'],['espacos','Espaços'],['ponto','Ponto'],['integracao','Integração']],TAB={};
+const tabs=[['painel','Painel'],['mensagens','Mensagens'],['quadros','Quadros'],['custeio','Custeio'],['materia','Matéria'],['paineis','Painéis'],['folha','Folha'],['financeiro','Financeiro'],['departamentos','Depts'],['espacos','Espaços'],['ponto','Ponto'],['integracao','Integração'],['seguranca','Segurança']],TAB={};
 const SKEL='<div class="sk" style="height:44px;width:min(300px,60%);margin:22px 0 14px"></div><div class="grid g2"><div class="sk"></div><div class="sk"></div></div><div class="sk" style="margin-top:12px;height:170px"></div>';
+const accessibleTabs=()=>ROLE==='admin'?tabs:tabs.filter(tab=>['quadros','seguranca'].includes(tab[0]));
+let LIVE_SOCKET=null,LIVE_RETRY=0,SEARCH_TIMER=0;
+function connectLiveEvents(){if(ROLE==='employee'||!TOKEN)return;clearTimeout(LIVE_RETRY);const scheme=location.protocol==='https:'?'wss:':'ws:';const socket=new WebSocket(`${scheme}//${location.host}/events`);LIVE_SOCKET=socket;socket.onopen=()=>socket.send(JSON.stringify({token:TOKEN}));socket.onmessage=event=>{const message=JSON.parse(event.data);if(message.type==='change'){toast('Atualização recebida em tempo real.','ok');const routes={tasks:'/tasks',materials:'/materials'};if(routes[message.resource])offlineValue('responses','readwrite',store=>store.delete(offlineOwner()+':'+routes[message.resource])).catch(error=>console.error('Falha ao atualizar cache offline:',error));const active={tasks:'quadros',materials:'materia',messages:'mensagens',dashboard:'painel'};const module=Object.keys(active).find(key=>message.resource.startsWith('/'+key));if(module&&S.tab===active[module])refresh()}};socket.onclose=()=>{if(TOKEN&&ROLE!=='employee')LIVE_RETRY=setTimeout(connectLiveEvents,5000)}}
+function openSearch(){const overlay=$('#searchOverlay');if(!overlay)return;overlay.hidden=false;const input=$('#globalSearch');input.value='';$('#searchResults').innerHTML='<p class="sub">Digite ao menos 2 caracteres para buscar.</p>';input.focus()}
+function closeSearch(){const overlay=$('#searchOverlay');if(overlay)overlay.hidden=true}
+async function searchGlobal(){clearTimeout(SEARCH_TIMER);SEARCH_TIMER=setTimeout(async()=>{const query=$('#globalSearch')?.value.trim();if(!query||query.length<2){$('#searchResults').innerHTML='<p class="sub">Digite ao menos 2 caracteres para buscar.</p>';return}try{const items=await api('/search?q='+encodeURIComponent(query));$('#searchResults').innerHTML=items.length?items.map(item=>`<button class="search-result" onclick="selectSearchResult('${item.kind}',${item.id})"><span>${esc(item.title||item.name)}</span><small>${esc({task:'Quadro',product:'Produto',employee:'Colaborador'}[item.kind]||item.kind)}</small></button>`).join(''):'<p class="sub">Nenhum resultado encontrado.</p>'}catch(error){$('#searchResults').innerHTML=`<p class="sub">${esc(error.message)}</p>`}},180)}
+function selectSearchResult(kind,id){closeSearch();const destination={task:'quadros',product:'custeio',employee:'folha'}[kind];if(destination)go(destination)}
+addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();openSearch()}if(event.key==='Escape')closeSearch()});
+function updateNetworkStatus(){document.body.classList.toggle('offline',!navigator.onLine);const status=$('#networkStatus');if(status)status.textContent=navigator.onLine?'Online':'Offline'}
+addEventListener('online',()=>{updateNetworkStatus();syncOfflineQueue().catch(error=>toast(error.message,'no'))});addEventListener('offline',updateNetworkStatus);
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js').catch(error=>console.error('Não foi possível ativar o modo offline:',error));
 async function app(){
- if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>SIGI</span><div class="tabs" id="tabs"><i class="pill"></i>${tabs.map(t=>`<button data-t="${t[0]}" class="${S.tab==t[0]?'on':''}" onclick="go('${t[0]}')">${t[1]}</button>`).join('')}</div><span class="sp"></span>
- ${motionButton()}${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
- placeAll(true);go(S.tab,{first:true})}
+ const visible=accessibleTabs();if(!visible.some(tab=>tab[0]===S.tab))S.tab=ROLE==='admin'?'painel':'quadros';
+ if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>SIGI</span><div class="tabs" id="tabs"><i class="pill"></i>${visible.map(t=>`<button data-t="${t[0]}" class="${S.tab==t[0]?'on':''}" onclick="go('${t[0]}')">${t[1]}</button>`).join('')}</div><span class="sp"></span>
+ ${ROLE!=='operator'?'<button class="chip" onclick="openSearch()" title="Busca global (Ctrl+K)">Buscar</button>':''}<span class="offline-indicator" id="networkStatus">${navigator.onLine?'Online':'Offline'}</span>${motionButton()}${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main><div id="searchOverlay" class="search-overlay" hidden onclick="if(event.target===this)closeSearch()"><section class="search-dialog" role="dialog" aria-modal="true" aria-label="Busca global"><div class="row" style="margin:0"><input id="globalSearch" placeholder="Buscar módulos, tarefas, produtos ou pessoas" oninput="searchGlobal()"><button class="chip" onclick="closeSearch()">Fechar</button></div><div id="searchResults" class="search-results"></div></section></div></div>`))return;
+ placeAll(true);connectLiveEvents();updateNetworkStatus();if(navigator.onLine)syncOfflineQueue().catch(error=>console.error('Falha ao sincronizar alterações offline:',error));go(S.tab,{first:true})}
 async function employeeApp(){
+ if(LIVE_SOCKET){LIVE_SOCKET.close();LIVE_SOCKET=null}
  if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>SIGI</span><span class="sp"></span><span>${esc(CURRENT_NAME)}</span>${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="main"></main></div>`))return;
  placeAll(true);go('mensagens',{first:true})}
 function markTabs(anim){document.querySelectorAll('#tabs button').forEach(b=>{const on=b.dataset.t==S.tab;b.classList.toggle('on',on);on?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current')});
@@ -318,11 +366,18 @@ function settle(m,b){if(still())return;
  m.querySelectorAll('[data-k]').forEach(e=>{const a=b.k.get(e.dataset.k);
   if(!a)e.animate([{opacity:0,transform:'scale(.9) translateY(-10px)'},{opacity:1,transform:'none'}],{duration:480,easing:'cubic-bezier(.34,1.56,.64,1)'});
   else{const r=e.getBoundingClientRect(),dx=a.left-r.left,dy=a.top-r.top;if(dx||dy)e.animate([{transform:`translate(${dx}px,${dy}px)`},{transform:'none'}],{duration:560,easing:'cubic-bezier(.22,1,.36,1)'})}})}
-let NAV=0;
-async function go(tab,o={}){if(!TOKEN)return;const main=$('#main');if(!main)return;
+let NAV=0,DASH_TIMER=0,DASH_REFRESHING=false;
+function stopDashboardRefresh(){clearInterval(DASH_TIMER);DASH_TIMER=0}
+function scheduleDashboardRefresh(tab){
+ stopDashboardRefresh();if(tab!=='painel')return;
+ DASH_TIMER=setInterval(async()=>{if(document.hidden||!TOKEN||S.tab!=='painel'||DASH_REFRESHING)return;DASH_REFRESHING=true;
+  try{await go('painel',{soft:true})}catch(e){toast(e.message,'no')}finally{DASH_REFRESHING=false}
+ },30000)
+}
+async function go(tab,o={}){if(!TOKEN)return;if(ROLE!=='admin'&&!['quadros','seguranca'].includes(tab))return;const main=$('#main');if(!main)return;
  if(tab===S.tab&&!o.first&&!o.soft)o.soft=true;
  const seq=++NAV,ord=tabs.map(t=>t[0]),dir=o.soft||o.first?0:Math.sign(ord.indexOf(tab)-ord.indexOf(S.tab));
- const before=o.soft?snap(main):null;S.tab=tab;if(!o.soft)markTabs(!o.first);
+ const before=o.soft?snap(main):null;S.tab=tab;scheduleDashboardRefresh(tab);if(!o.soft)markTabs(!o.first);
  const data=TAB[tab]();data.catch(()=>{});
  if(!o.soft&&!o.first){main.style.setProperty('--dir',dir);main.className='leave';await wait(still()?0:210);if(seq!==NAV)return;if(scrollY>40)scrollTo({top:0,behavior:still()?'auto':'smooth'})}
  if(!o.soft&&!await Promise.race([data.then(()=>1,()=>1),wait(150).then(()=>0)])){if(seq!==NAV)return;main.className='';main.innerHTML=SKEL;play(main,0)}
@@ -383,13 +438,32 @@ function dreCards(d){const neg=d.lucro<0;return `<div class="grid k4" style="mar
 <div class="card"><h3>Lucro líquido grosso</h3><span class="big">${cnt(d.lucro,'R')}</span><span class="d"><span class="tag ${neg?'x':''}">${(d.margem_pct||0).toLocaleString('pt-BR')}%</span></span></div>
 </div>`}
 
+function dashboardFinanceChart(d){
+ const values=[['Receita bruta',d.receita,'var(--b)'],['Matéria-prima',d.materia,'var(--o)'],['Custos + impostos',d.custos,'var(--y)'],['Lucro',d.lucro,d.lucro<0?'var(--r)':'var(--g)']],max=Math.max(1,...values.map(item=>Math.abs(item[1]||0)));
+ return `<div class="card"><h3>Composição do DRE</h3><p class="sub" style="margin:0">Valores consolidados das análises de custo.</p><div class="dash-bars" role="list" aria-label="Composição financeira">
+ ${values.map(([name,value,color])=>`<div class="dash-bar-row" role="listitem" title="${esc(name)}: ${R(value)}"><span class="dash-bar-name">${esc(name)}</span><span class="dash-track"><i style="--bar-width:${Math.abs(value||0)/max*100}%;--bar-color:${color}"></i></span><b class="dash-bar-value">${R(value)}</b></div>`).join('')}
+ </div><div class="row"><button class="chip" onclick="go('paineis')">Abrir análises de custo</button></div></div>`
+}
+function dashboardAttendanceChart(series){
+ const days=series||[],max=Math.max(1,...days.map(day=>day.employees||0));
+ const accessible=days.map(day=>`${day.date}: ${day.employees}`).join('; ');
+ return `<div class="card"><h3>Presença · últimos 14 dias</h3><p class="sub" style="margin:0">Pessoas com marcação aceita em cada dia.</p>
+ <div class="attendance-chart" role="img" aria-label="Presença nos últimos 14 dias: ${accessible}">${days.map(day=>{const label=new Date(day.date+'T12:00:00Z').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',timeZone:'UTC'});return `<div class="attendance-column" title="${label}: ${day.employees} ${day.employees==1?'pessoa':'pessoas'}"><i style="--bar-height:${Math.max(day.employees?8:3,day.employees/max*100)}%"></i><small>${label.slice(0,2)}</small></div>`}).join('')}</div>
+ <div class="row"><button class="chip" onclick="go('ponto')">Ver espelho de ponto</button></div></div>`
+}
+function dashboardAlerts(alerts){
+ if(!alerts.length)return '<div class="dash-alert-empty">Tudo em ordem: nenhum alerta operacional no momento.</div>';
+ return `<div class="dash-alerts" role="list">${alerts.map(alert=>`<button class="dash-alert ${alert.severity}" role="listitem" onclick="go('${alert.tab}')"><i class="dot" aria-hidden="true"></i><span><strong>${esc(alert.title)}</strong><small>${esc(alert.detail)}</small></span><span aria-hidden="true">›</span></button>`).join('')}</div>`
+}
+
 TAB.painel=painel;
 async function painel(){
  const d=await api('/dashboard'),T=d.tasks,tot=T[0]+T[1]+T[2],pct=tot?T[2]/tot*100:0,pr=d.payroll,sm=d.setup,n=d.present_now,dr=d.dre||{receita:0,materia:0,custos:0,lucro:0,margem_pct:0},
  steps=[[sm.employees,'Cadastrar funcionários','folha'],[sm.products,'Cadastrar produtos','custeio'],[sm.workplace,'Definir o local de trabalho do ponto','ponto'],[sm.tasks,'Criar a primeira tarefa','quadros'],[sm.materials,'Cadastrar matéria-prima','materia'],[sm.spaces,'Criar um espaço','espacos']],ok=steps.filter(s=>s[0]).length,ct=pr.company_cost||1;
- const seg=[['Líquido a pagar',pr.net,'var(--g)'],['INSS retido',pr.inss,'var(--o)'],['Encargos patronais',pr.charges,'var(--b)']];
+ const seg=[['Líquido a pagar',pr.net,'var(--g)'],['INSS retido',pr.inss,'var(--o)'],['Encargos patronais',pr.charges,'var(--b)']],updated=new Date(d.updated_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
  const lots=d.lots||[];
  return `<h1>${saudacao()}, gestor</h1><p class="sub">${n?`${n} ${n==1?'pessoa está':'pessoas estão'} trabalhando agora.`:'Tarefas, custos, equipe e ponto em um só lugar.'}</p>
+ <div class="dash-toolbar"><span>Atualizado às ${updated} · atualização automática a cada 30 s</span><button class="chip" onclick="run(()=>go('painel',{soft:true}),this)">Atualizar agora</button></div>
 <div class="grid g2"><div class="card"><h3>Primeiros passos · ${ok} de 6</h3><div class="bar"><b style="width:${ok/6*100}%"></b></div><ul class="steps">${steps.map(s=>s[0]?`<li class="done">${CK}<span>${s[1]}</span></li>`:`<li><button onclick="go('${s[2]}')">${CK}<span class="st">${s[1]}</span></button></li>`).join('')}</ul></div>
 <div class="card"><h3>Meta de tarefas</h3>${gauge(pct)}<div class="row" style="justify-content:center;gap:14px"><span class="tag w">A fazer ${T[0]}</span><span class="tag" style="background:rgba(145,175,199,.22);color:#607E97">Andamento ${T[1]}</span><span class="tag">Concluídas ${T[2]}</span></div></div></div>
 <h1 class="lh1">Eficiência operacional & DRE sintético</h1>
@@ -398,7 +472,9 @@ ${dreCards(dr)}
 <div class="grid k4" style="margin-top:12px"><div class="card"><h3>Custo da folha</h3><span class="big">${cnt(pr.company_cost,'R')}</span><span class="d">por mês</span>${sparks(d.salaries)}</div>
 <div class="card"><h3>Margem média</h3><span class="big">${cnt(d.avg_margin_pct,'q')}</span><span class="d">dos produtos</span>${sparks(d.margins.map(m=>Math.max(m.pct,0)))}</div>
 <div class="card"><h3>Tarefas por etapa</h3><span class="big">${cnt(T[2],'i')}/${tot}</span><span class="d">concluídas</span>${sparks(T)}</div>
-<div class="card"><h3>Presentes agora</h3><span class="big">${cnt(n,'i')}/${d.employees_active}</span><span class="d">no trabalho</span>${sparks(d.attendance_14d)}<div class="cap">Presença nos últimos 14 dias</div></div></div>
+<div class="card"><h3>Horas trabalhadas</h3><span class="big">${cnt(d.hours_worked,'h')} h</span><span class="d">no mês · ${cnt(d.overtime_hours,'h')} h extras</span></div></div>
+<div class="dash-charts">${dashboardFinanceChart(dr)}${dashboardAttendanceChart(d.attendance_series)}</div>
+<div class="card" style="margin-top:12px"><h3>Alertas operacionais <span class="cn">${d.alerts.length}</span></h3>${dashboardAlerts(d.alerts)}</div>
 <div class="card tw" style="margin-top:12px"><h3>Boards</h3>
 ${lots.length?`<table><tr><th>Item</th><th>Status</th><th>Prioridade</th><th>Prazo final</th><th>Progresso</th><th>Aprovação</th><th>Responsável</th></tr>
 ${lots.map(t=>`<tr data-k="t${t.id}"><td><b>${esc(t.title)}</b></td><td>${tagOf(SEV,t.severity||'normal')}</td><td>${tagOf(PRI,t.priority||'media')}</td><td>${esc(t.due||'—')}</td><td>${prog(t.progress)}</td><td>${tagOf(APV,t.approval||'pendente')}</td><td>${av(t.assignee)}</td></tr>`).join('')}</table>`:'<p class="sub">Nenhum lote no quadro ainda. Crie o primeiro em Quadros.</p>'}
@@ -408,6 +484,7 @@ ${lots.map(t=>`<tr data-k="t${t.id}"><td><b>${esc(t.title)}</b></td><td>${tagOf(
 
 TAB.quadros=quadros;
 async function quadros(){const T=await api('/tasks'),C=[['A fazer','var(--o)','Nenhuma tarefa pendente.'],['Em andamento','var(--b)','Nada em andamento agora.'],['Concluído','var(--g)','Nada concluído ainda.']];
+ if(ROLE!=='admin')return `<h1>Quadros</h1><p class="sub">Tarefas operacionais. Gestores podem decidir solicitações aguardando aprovação.</p><div class="grid g2">${T.map(t=>`<article class="card"><h3>${esc(t.title)}<span class="cn">${['A fazer','Em andamento','Concluído'][t.status]||'—'}</span></h3><p class="sub">${esc(t.assignee||'Sem responsável')}${t.due?' · prazo '+esc(t.due):''}</p><div class="row">${tagOf(SEV,t.severity||'normal')} ${tagOf(PRI,t.priority||'media')} ${tagOf(APV,t.approval||'pendente')}</div>${ROLE==='manager'&&t.approval==='pendente'?`<div class="row"><button class="btn" onclick="run(()=>decideTask(${t.id},'aprovado'),this)">Aprovar</button><button class="chip" onclick="run(()=>decideTask(${t.id},'recusado'),this)">Recusar</button></div>`:''}</article>`).join('')||'<div class="card"><p class="sub">Nenhuma tarefa cadastrada.</p></div>'}</div>`;
  const q=(S.q||'').toLowerCase(),f=S.filt||'';
  const L0=T.filter(t=>(!q||t.title.toLowerCase().includes(q)||(t.assignee||'').toLowerCase().includes(q))&&(!f||t.severity==f||t.priority==f||t.approval==f));
  const kan=`<div class="kan">${C.map((c,i)=>{const L=L0.filter(t=>t.status==i);return `<div class="card"><h3><i class="dot" style="background:${c[1]}"></i>${c[0]}<span class="cn">${L.length}</span></h3>${L.length?L.map(t=>`<div class="task ${i==2?'done':''}" style="--tc:${c[1]}" data-k="t${t.id}" tabindex="0" role="button" onclick="run(()=>mv(${t.id},${(t.status+1)%3}))" onkeydown="if(event.key=='Enter'||event.key==' '){event.preventDefault();this.click()}"><div><b>${esc(t.title)}</b><small>${esc(t.assignee||'Sem responsável')}${t.due?' · prazo '+esc(t.due):''}</small><small>${tagOf(SEV,t.severity||'normal')} ${tagOf(PRI,t.priority||'media')} ${tagOf(APV,t.approval||'pendente')}</small></div><button class="x" onclick="event.stopPropagation();run(()=>delT(${t.id}))" onkeydown="event.stopPropagation()" title="Excluir tarefa" aria-label="Excluir tarefa">×</button></div>`).join(''):`<div class="none">${c[2]}</div>`}</div>`}).join('')}</div>`;
@@ -431,6 +508,7 @@ ${S.board=='tab'?tab:kan}
 <input id="ng" type="number" min="0" max="100" placeholder="Progresso %"></div>
 <div class="row"><button class="btn" onclick="run(addT,this)">Adicionar item</button></div></div>`}
 async function mv(id,s){await api(`/tasks/${id}/status/${s}`,'PATCH');await refresh()}
+async function decideTask(id,decision){await api(`/tasks/${id}/approval`,'POST',{decision});toast(`Tarefa ${decision}.`,'ok');await refresh()}
 async function delT(id){await api('/tasks/'+id,'DELETE');await gone($(`[data-k="t${id}"]`));await refresh()}
 async function edT(id,p){await api('/tasks/'+id,'PATCH',p);await refresh()}
 async function addT(){const t=$('#nt').value.trim();if(!t)return toast('Digite o título da tarefa.','no');
@@ -494,14 +572,14 @@ TAB.materia=materia;
 async function materia(){const M=await api('/materials'),tot=M.reduce((s,m)=>s+m.value,0);
  return `<h1>Matéria-prima</h1><p class="sub">Estoque e custo unitário. O valor em estoque entra no DRE quando não há painel de custo cadastrado.</p>
 <div class="grid k4"><div class="card"><h3>Itens</h3><span class="big">${cnt(M.length,'i')}</span></div><div class="card"><h3>Valor em estoque</h3><span class="big">${cnt(tot,'R')}</span></div></div>
-<div class="card tw" style="margin-top:12px"><table><tr><th>Material</th><th>Unidade</th><th>Estoque</th><th>Custo unitário</th><th>Valor</th><th></th></tr>
-${M.map(m=>`<tr data-k="m${m.id}"><td><input value="${esc(m.name)}" aria-label="Nome" onchange="run(()=>edM(${m.id},this))"></td><td><input value="${esc(m.unit)}" aria-label="Unidade" onchange="run(()=>edM(${m.id},this))"></td><td><input type="number" min="0" step="0.01" value="${m.stock}" aria-label="Estoque" onchange="run(()=>edM(${m.id},this))"></td><td><input type="number" min="0" step="0.01" value="${m.unit_cost}" aria-label="Custo" onchange="run(()=>edM(${m.id},this))"></td><td>${R(m.value)}</td><td><button class="chip" onclick="run(()=>delM(${m.id}),this)">×</button></td></tr>`).join('')}
+<div class="card tw" style="margin-top:12px"><table><tr><th>Material</th><th>Unidade</th><th>Estoque</th><th>Mínimo</th><th>Custo unitário</th><th>Valor</th><th></th></tr>
+${M.map(m=>`<tr data-k="m${m.id}"><td><input value="${esc(m.name)}" aria-label="Nome" onchange="run(()=>edM(${m.id},this))"></td><td><input value="${esc(m.unit)}" aria-label="Unidade" onchange="run(()=>edM(${m.id},this))"></td><td><input type="number" min="0" step="0.01" value="${m.stock}" aria-label="Estoque" onchange="run(()=>edM(${m.id},this))"></td><td><input type="number" min="0" step="0.01" value="${m.minimum_stock}" aria-label="Estoque mínimo" onchange="run(()=>edM(${m.id},this))"></td><td><input type="number" min="0" step="0.01" value="${m.unit_cost}" aria-label="Custo" onchange="run(()=>edM(${m.id},this))"></td><td>${R(m.value)}</td><td><button class="chip" onclick="run(()=>delM(${m.id}),this)">×</button></td></tr>`).join('')}
 </table>${M.length?'':'<p class="sub" style="margin:10px 0 0">Nenhum material ainda. Adicione o primeiro abaixo.</p>'}</div>
-<div class="card" style="margin-top:12px"><h3>Novo material</h3><div class="row"><input id="mn" placeholder="Nome"><input id="mu" placeholder="Unidade (kg, m, un)"><input id="ms" type="number" min="0" step="0.01" placeholder="Estoque"><input id="mc" type="number" min="0" step="0.01" placeholder="Custo unitário"></div><div class="row"><button class="btn" onclick="run(addM,this)">Adicionar material</button></div></div>`}
-function matRow(id){const tr=$(`[data-k="m${id}"]`);const i=tr.querySelectorAll('input');return {name:i[0].value.trim(),unit:i[1].value.trim()||'un',stock:+i[2].value||0,unit_cost:+i[3].value||0}}
+<div class="card" style="margin-top:12px"><h3>Novo material</h3><div class="row"><input id="mn" placeholder="Nome"><input id="mu" placeholder="Unidade (kg, m, un)"><input id="ms" type="number" min="0" step="0.01" placeholder="Estoque"><input id="mm" type="number" min="0" step="0.01" placeholder="Estoque mínimo"><input id="mc" type="number" min="0" step="0.01" placeholder="Custo unitário"></div><div class="row"><button class="btn" onclick="run(addM,this)">Adicionar material</button></div></div>`}
+function matRow(id){const tr=$(`[data-k="m${id}"]`);const i=tr.querySelectorAll('input');return {name:i[0].value.trim(),unit:i[1].value.trim()||'un',stock:+i[2].value||0,minimum_stock:+i[3].value||0,unit_cost:+i[4].value||0}}
 async function edM(id){const m=matRow(id);if(!m.name)return toast('Digite o nome.','no');await api('/materials/'+id,'PUT',m);await refresh()}
 async function delM(id){await api('/materials/'+id,'DELETE');await gone($(`[data-k="m${id}"]`));await refresh()}
-async function addM(){const n=$('#mn').value.trim();if(!n)return toast('Digite o nome do material.','no');await api('/materials','POST',{name:n,unit:$('#mu').value.trim()||'un',stock:+$('#ms').value||0,unit_cost:+$('#mc').value||0});await refresh()}
+async function addM(){const n=$('#mn').value.trim();if(!n)return toast('Digite o nome do material.','no');await api('/materials','POST',{name:n,unit:$('#mu').value.trim()||'un',stock:+$('#ms').value||0,minimum_stock:+$('#mm').value||0,unit_cost:+$('#mc').value||0});await refresh()}
 
 TAB.paineis=paineis;
 async function paineis(){const A=await api('/cost-analyses');
@@ -561,6 +639,27 @@ ${I.map(i=>`<tr data-k="i${i.id}"><td>${esc(i.name)}</td><td><span class="tag">$
 async function addI(){const n=$('#in').value.trim();if(!n)return toast('Digite o nome.','no');await api('/integrations','POST',{name:n,kind:$('#ik').value,endpoint:$('#ie').value.trim(),active:true});await refresh()}
 async function tgI(id,on,name,kind,endpoint){await api('/integrations/'+id,'PATCH',{name,kind,endpoint,active:!!on});await refresh()}
 async function delI(id){await api('/integrations/'+id,'DELETE');await gone($(`[data-k="i${id}"]`));await refresh()}
+
+TAB.seguranca=seguranca;
+async function seguranca(){
+ if(ROLE!=='admin'){const totp=await api('/auth/2fa');return `<h1>Segurança da conta</h1><p class="sub">Proteja sua conta com códigos temporários de um aplicativo autenticador.</p><section class="card"><h3>Autenticador de dois fatores</h3><p class="sub">${totp.enabled?'Proteção TOTP ativada para esta conta.':'Ative códigos de 6 dígitos usando Google Authenticator, Authy ou outro aplicativo compatível.'}</p><div id="totpSetup"></div>${totp.enabled?'<div class="row"><input id="totpDisableCode" inputmode="numeric" maxlength="6" placeholder="Código atual"><button class="chip" onclick="run(disableTotp,this)">Desativar 2FA</button></div>':'<button class="btn" onclick="run(beginTotp,this)">Configurar 2FA</button>'}</section>`}
+ const [accounts,audit,totp,channels,departments]=await Promise.all([api('/team/accounts'),api('/audit?limit=25'),api('/auth/2fa'),api('/notification-channels'),api('/departments')]);
+ return `<h1>Segurança e notificações</h1><p class="sub">Acesso por função, autenticação em duas etapas, trilha de auditoria e destinos de alerta.</p>
+ <div class="grid g2"><section class="card"><h3>Autenticador de dois fatores</h3><p class="sub">${totp.enabled?'Proteção TOTP ativada para esta conta.':'Ative códigos de 6 dígitos usando Google Authenticator, Authy ou outro aplicativo compatível.'}</p><div id="totpSetup"></div>${totp.enabled?'<div class="row"><input id="totpDisableCode" inputmode="numeric" maxlength="6" placeholder="Código atual"><button class="chip" onclick="run(disableTotp,this)">Desativar 2FA</button></div>':'<button class="btn" onclick="run(beginTotp,this)">Configurar 2FA</button>'}</section>
+ <section class="card"><h3>Canais de aviso</h3><p class="sub">E-mail usa SMTP; WhatsApp usa a Cloud API. Credenciais ficam somente nas variáveis de ambiente do servidor.</p>
+ ${channels.map(channel=>`<div class="row" style="align-items:center"><span>${channel.kind==='email'?'E-mail':'WhatsApp'} · ${esc(channel.recipient)}</span><button class="chip" onclick="run(()=>removeChannel(${channel.id}),this)">Remover</button></div>`).join('')||'<p class="sub">Nenhum destino cadastrado.</p>'}
+ <div class="row"><select id="channelKind" aria-label="Tipo de canal"><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select><input id="channelRecipient" placeholder="E-mail ou telefone com código do país"></div><div class="row"><button class="chip" onclick="run(addChannel,this)">Adicionar canal</button><button class="chip" onclick="run(sendTestNotification,this)">Enviar teste</button></div></section></div>
+ <section class="card tw" style="margin-top:12px"><h3>Contas e funções</h3><p class="sub">Administrador: controle total. Gestor: quadro, busca e aprovações. Operador: consulta dos quadros.</p>
+ <table><tr><th>Conta</th><th>Função</th><th>Departamento</th><th></th></tr>${accounts.map((account,index)=>`<tr data-account="${esc(account.user)}"><td>${esc(account.user)}</td><td>${account.role==='admin'?'<span class="tag">Administrador</span>':`<select id="team-role-${index}" aria-label="Função">${[['manager','Gestor'],['operator','Operador']].map(([value,label])=>`<option value="${value}" ${account.role===value?'selected':''}>${label}</option>`).join('')}</select>`}</td><td>${account.role==='admin'?'—':`<select id="team-dept-${index}" aria-label="Departamento"><option value="">Sem departamento</option>${departments.map(department=>`<option value="${department.id}" ${account.department_id===department.id?'selected':''}>${esc(department.name)}</option>`).join('')}</select>`}</td><td>${account.role==='admin'?'':`<button class="chip" onclick="run(()=>saveTeamRole(this,${index}),this)">Salvar</button>`}</td></tr>`).join('')}</table></section>
+ <section class="card tw" style="margin-top:12px"><h3>Auditoria · últimas 25 ações</h3><table><tr><th>Data/hora</th><th>Conta</th><th>Ação</th><th>Recurso</th><th>HTTP</th><th>IP</th></tr>${audit.map(item=>`<tr><td>${esc(when(item.at))}</td><td>${esc(item.actor||'anônimo')}</td><td>${esc(item.action)}</td><td>${esc(item.resource)}</td><td>${item.status}</td><td>${esc(item.ip)}</td></tr>`).join('')}</table></section>`
+}
+async function beginTotp(){const setup=await api('/auth/2fa/setup','POST');$('#totpSetup').innerHTML=`<p class="sub">Cadastre esta chave no aplicativo autenticador: <strong>${esc(setup.secret)}</strong></p><p class="sub">URI para QR: <code>${esc(setup.otpauth_url)}</code></p><div class="row"><input id="totpEnableCode" inputmode="numeric" maxlength="6" placeholder="Código de 6 dígitos"><button class="chip" onclick="run(enableTotp,this)">Confirmar e ativar</button></div>`}
+async function enableTotp(){await api('/auth/2fa/enable','POST',{code:$('#totpEnableCode').value.trim()});toast('Autenticação em duas etapas ativada.','ok');await refresh()}
+async function disableTotp(){await api('/auth/2fa/disable','POST',{code:$('#totpDisableCode').value.trim()});toast('Autenticação em duas etapas desativada.','ok');await refresh()}
+async function saveTeamRole(button,index){const row=button.closest('[data-account]'),role=$(`#team-role-${index}`).value,department_id=+$(`#team-dept-${index}`).value||null;await api('/team/accounts/'+encodeURIComponent(row.dataset.account),'PATCH',{role,department_id});toast('Permissões salvas; a conta precisa entrar novamente.','ok');await refresh()}
+async function addChannel(){await api('/notification-channels','POST',{kind:$('#channelKind').value,recipient:$('#channelRecipient').value.trim()});await refresh()}
+async function removeChannel(id){await api('/notification-channels/'+id,'DELETE');await refresh()}
+async function sendTestNotification(){const result=await api('/notifications/test','POST',{message:'Este é um aviso de teste do SIGI.'});toast(`Teste enviado para ${result.sent} canal(is).`,'ok')}
 
 tela();
 </script></body></html>

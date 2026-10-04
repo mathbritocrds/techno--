@@ -24,6 +24,8 @@ TABLES = (
     "cost_analyses",
     "integrations",
     "messages",
+    "audit_log",
+    "notification_channels",
 )
 
 
@@ -41,6 +43,9 @@ def main():
     counts = {}
     with sqlite3.connect(DB_PATH) as source, psycopg2.connect(DATABASE_URL, sslmode="require") as target:
         source.row_factory = sqlite3.Row
+        source_tables = {row[0] for row in source.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
         with target.cursor() as cursor:
             for statement in schema.split(";"):
                 if statement.strip():
@@ -59,6 +64,9 @@ def main():
                 )
 
             for table in TABLES:
+                if table not in source_tables:
+                    counts[table] = 0
+                    continue
                 records = source.execute(f"SELECT * FROM {quoted(table)}").fetchall()
                 columns = [column for column in records[0].keys()] if records else [
                     column[1] for column in source.execute(f"PRAGMA table_info({quoted(table)})")

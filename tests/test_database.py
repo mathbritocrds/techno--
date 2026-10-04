@@ -90,9 +90,13 @@ def test_supabase_schema_has_all_tables_and_blocks_public_api_access():
     expected = {
         "admins", "sessions", "settings", "departments", "employees", "products", "tasks",
         "time_entries", "transactions", "materials", "spaces", "cost_analyses", "integrations",
-        "messages",
+        "messages", "audit_log", "notification_channels",
     }
 
     assert all(f"CREATE TABLE IF NOT EXISTS {table}" in schema for table in expected)
+    assert "minimum_stock DOUBLE PRECISION NOT NULL DEFAULT 0" in schema
+    assert "totp_secret TEXT" in schema and "department_id BIGINT" in schema
+    assert "ALTER TABLE admins ENABLE ROW LEVEL SECURITY" in schema
+    assert "ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY" in schema
     assert "ENABLE ROW LEVEL SECURITY" in schema
     assert "FROM anon, authenticated" in schema
