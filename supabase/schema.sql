@@ -345,3 +345,17 @@ ALTER TABLE space_staff_rules ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE space_staff_rules FROM anon, authenticated;
 ALTER TABLE event_staff_assignments ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE event_staff_assignments FROM anon, authenticated;
+
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS lead_employee_id INTEGER REFERENCES employees(id);
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id);
+CREATE TABLE IF NOT EXISTS dre_import_batches(
+ id SERIAL PRIMARY KEY, sha256 TEXT NOT NULL, actor TEXT NOT NULL,
+ created_at TEXT NOT NULL, row_count INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS dre_import_entries(
+ id SERIAL PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES dre_import_batches(id),
+ reference TEXT NOT NULL UNIQUE, month TEXT NOT NULL, department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+ category TEXT NOT NULL, description TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL CHECK(amount>0));
+CREATE INDEX IF NOT EXISTS ix_dre_import_month ON dre_import_entries(month,department_id);
+ALTER TABLE dre_import_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dre_import_entries ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON dre_import_batches,dre_import_entries FROM anon,authenticated;

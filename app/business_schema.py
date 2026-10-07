@@ -38,10 +38,20 @@ CREATE TABLE IF NOT EXISTS event_staff_assignments(
  employee_id INTEGER NOT NULL REFERENCES employees(id), duty TEXT NOT NULL,
  starts_at TEXT NOT NULL, ends_at TEXT NOT NULL,
  UNIQUE(booking_id,employee_id,duty));
+CREATE TABLE IF NOT EXISTS dre_import_batches(
+ id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL, actor TEXT NOT NULL,
+ created_at TEXT NOT NULL, row_count INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS dre_import_entries(
+ id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES dre_import_batches(id),
+ reference TEXT NOT NULL UNIQUE, month TEXT NOT NULL, department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+ category TEXT NOT NULL, description TEXT NOT NULL, amount REAL NOT NULL CHECK(amount>0));
+CREATE INDEX IF NOT EXISTS ix_dre_import_month ON dre_import_entries(month,department_id);
 CREATE INDEX IF NOT EXISTS ix_event_staff_time ON event_staff_assignments(employee_id,starts_at,ends_at);
 CREATE INDEX IF NOT EXISTS ix_payment_history_time ON payment_history(paid_at);
 """
 MIGRATIONS = [
+ "ALTER TABLE departments ADD COLUMN lead_employee_id INTEGER REFERENCES employees(id)",
+ "ALTER TABLE admins ADD COLUMN employee_id INTEGER REFERENCES employees(id)",
  "ALTER TABLE transactions ADD COLUMN category TEXT NOT NULL DEFAULT 'operating'",
  "ALTER TABLE transactions ADD COLUMN competence TEXT NOT NULL DEFAULT ''",
  "ALTER TABLE transactions ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",

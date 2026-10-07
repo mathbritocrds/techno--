@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 D = lambda value: Decimal(str(value))
 ZERO = D(0)
-RULES_VERSION = 'BR-2026.1'
+RULES_VERSION = 'BR-2026.2'
 PROFILE_DEFAULTS = dict(hired_on='', terminated_on='', dependents=0, alimony=0,
     other_deductions=0, vt_amount=0, vt_rate=.06, va_amount=0, va_discount=0,
     fgts_rate=.08, employer_rate=.20, vacation_days=30, variable_average=0)
@@ -28,6 +28,8 @@ def tax_rules(month):
         raise ValueError('Tabela fiscal não cadastrada para esta competência. Disponível: 2026.')
     return {'version': RULES_VERSION,
         'inss': [(1621, .075), (2902.84, .09), (4354.27, .12), (8475.55, .14)],
+        'inss_offsets': [0, 24.32, 111.40, 198.49], 'inss_max': 988.09,
+        'inss_method': 'progressive',
         'irrf': [(2428.80, 0, 0), (2826.65, .075, 182.16),
                  (3751.05, .15, 394.16), (4664.68, .225, 675.49), (None, .275, 908.73)],
         'dependent_deduction': 189.59, 'simplified_deduction': 607.20}
@@ -39,7 +41,7 @@ def inss(gross, month='2026-01'):
         taxable = max(ZERO, min(D(gross), D(ceiling)) - previous)
         total += taxable * D(rate)
         previous = D(ceiling)
-    return money(total)
+    return min(money(total), tax_rules(month)['inss_max'])
 
 
 def irrf(gross, contribution, profile, month):

@@ -201,6 +201,8 @@ with db() as c:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_username ON admins(lower(username)) WHERE username != ''")
 
 with db() as c:
+    c.execute("UPDATE departments SET lead_employee_id=(SELECT MIN(e.id) FROM employees e WHERE e.active=1 AND lower(e.name)=lower(departments.lead) AND (e.department_id IS NULL OR e.department_id=departments.id)) WHERE lead_employee_id IS NULL AND lead<>'' AND (SELECT COUNT(*) FROM employees e WHERE e.active=1 AND lower(e.name)=lower(departments.lead))=1 AND (SELECT COUNT(*) FROM departments d WHERE lower(d.lead)=lower(departments.lead))=1")
+    c.execute("UPDATE employees SET department_id=(SELECT MIN(d.id) FROM departments d WHERE d.lead_employee_id=employees.id) WHERE department_id IS NULL AND EXISTS(SELECT 1 FROM departments d WHERE d.lead_employee_id=employees.id)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_transaction_source ON transactions(source_key) WHERE source_key<>''")
     c.execute("UPDATE transactions SET category='revenue' WHERE kind='receber' AND category='operating'")
     c.execute("INSERT INTO payment_history(transaction_id,kind,description,amount,category,competence,paid_at,actor,department_id,source_key) SELECT id,kind,description,amount,category,CASE WHEN competence='' THEN substr(due,1,7) ELSE competence END,COALESCE(paid_at,due||'T12:00:00+00:00'),'legacy-import',department_id,source_key FROM transactions WHERE paid=1 AND NOT EXISTS (SELECT 1 FROM payment_history h WHERE h.transaction_id=transactions.id) ON CONFLICT(transaction_id) DO NOTHING")
@@ -265,10 +267,13 @@ def permission_delegable(role, module, permission):
         return permission in ({"view", "create", "edit", "delete"} if role == "manager" else {"view"})
     if module == "approvals":
         return role == "manager" and permission in {"view", "approve"}
+    if module == "finance":
+        return role == "manager" and permission in {"view", "create"}
     if module == "messages":
         return permission == "view"
     return False
 DEFAULT_PERMISSIONS = {
+    ("manager", "finance", "view"): True, ("manager", "finance", "create"): True,
     ("manager", "tasks", "view"): True, ("manager", "tasks", "approve"): True,
     ("manager", "approvals", "view"): True, ("manager", "approvals", "approve"): True,
     ("manager", "spaces", "view"): True, ("manager", "spaces", "create"): True,
@@ -278,6 +283,8 @@ DEFAULT_PERMISSIONS = {
 
 def request_permission(request):
     path, method = request.url.path, request.method
+    if path.startswith("/finance/dre"):
+        return "finance", "view" if method == "GET" else "create"
     if path.startswith("/tasks"):
         if path.endswith("/approval"):
             return "tasks", "approve"
@@ -341,6 +348,9 @@ def admin(authorization: str = Header(default=""), x_admin_token: str = Header(d
             account = c.execute('SELECT role FROM admins WHERE "user"=?', (r["user"],)).fetchone() if r else None
         if r and r["expires"] > time.time() and r["role"] == "admin" and account and account["role"] == "admin":
             return
+        if r and r['expires'] > time.time():
+            principal_for_token(authorization[7:])
+            raise HTTPException(403, "Sua função não permite acessar esta área administrativa.")
     if x_admin_token and hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
         return
     raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
@@ -366,8 +376,9 @@ class Registration(BaseModel):
     username: str = Field(default="", max_length=80)
     company_name: str = Field(default="", max_length=160)
     cnpj: str = Field(default="", pattern=r"^(\d{14})?$")
-    role: Literal["manager", "operator"] = "manager"
+    role: Literal["manager", "operator"] = "operator"
     department_id: Optional[int] = None
+    employee_id: Optional[int] = None
 
 class AccountUpdate(BaseModel):
     username: str = Field(min_length=1, max_length=80)
@@ -398,11 +409,15 @@ def principal_for_token(token: str):
         if not session or session["expires"] <= time.time():
             raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
         if session["role"] in ("admin", "manager", "operator"):
-            account = c.execute('SELECT role,department_id,username FROM admins WHERE "user"=?',
+            account = c.execute('SELECT role,department_id,username,employee_id FROM admins WHERE "user"=?',
                                 (session["user"],)).fetchone()
             if not account or account["role"] != session["role"]:
                 raise HTTPException(401, "Sessão inválida ou expirada. Entre novamente.")
-            return {"role": account["role"], "user": session["user"], "employee_id": None,
+            if account['role']=='manager':
+                linked=c.execute('SELECT id,department_id FROM employees WHERE id=? AND active=1',(account['employee_id'],)).fetchone()
+                if not linked or account['department_id'] is not None and linked['department_id']!=account['department_id']:
+                    raise HTTPException(403,"O administrador precisa vincular este gestor a um funcionário ativo do departamento.")
+            return {"role": account["role"], "user": session["user"], "employee_id": account["employee_id"],
                     "department_id": account["department_id"],
                     "name": account_username(session["user"], account["username"])}
         employee = c.execute("SELECT id,name,department_id FROM employees WHERE id=? AND lower(account_email)=lower(?) AND active=1",
@@ -462,9 +477,11 @@ def register_account(b: Registration, authorization: str = Header(default="")):
             "SELECT 1 FROM departments WHERE id=?", (department_id,)
         ).fetchone():
             raise HTTPException(404, "Departamento não encontrado.")
+        employee_id = b.employee_id if role == 'manager' else None
+        if role == 'manager': validate_manager_employee(c, employee_id, department_id)
         salt = secrets.token_hex(16)
-        c.execute('INSERT INTO admins("user",username,salt,hash,role,department_id) VALUES(?,?,?,?,?,?)',
-                  (email, username, salt, hash_pin(b.password, salt), role, department_id))
+        c.execute('INSERT INTO admins("user",username,salt,hash,role,department_id,employee_id) VALUES(?,?,?,?,?,?,?)',
+                  (email, username, salt, hash_pin(b.password, salt), role, department_id, employee_id))
         if not account_exists:
             c.execute("INSERT INTO settings(k,v) VALUES('co_name',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                       (company_name,))
@@ -607,6 +624,7 @@ def employee_summary(who=Depends(employee_principal)):
         "on_clock": open_entry is not None,
         "clocked_since": iso(open_entry) if open_entry else None,
         "worked_minutes": round(total / 60),
+        "completed_seconds": round(worked_seconds),
         "bank_minutes": round(total / 60) - round(daily_target * 60),
         "break_alert": bool(open_entry and shift_seconds >= alert_minutes * 60),
         "break_alert_minutes": alert_minutes,
@@ -861,12 +879,21 @@ def disable_totp(b: TotpCode, who=Depends(principal)):
 class RoleChange(BaseModel):
     role: Literal["manager", "operator"]
     department_id: Optional[int] = None
+    employee_id: Optional[int] = None
+
+def validate_manager_employee(c, employee_id, department_id):
+    employee = c.execute("SELECT id,name,department_id FROM employees WHERE id=? AND active=1", (employee_id,)).fetchone()
+    if not employee:
+        raise HTTPException(400, "Cadastre e selecione um funcionário ativo antes de conceder acesso de gestor.")
+    if department_id is not None and employee["department_id"] != department_id:
+        raise HTTPException(400, "O funcionário deve pertencer ao departamento que irá gerir.")
+    return employee
 
 @app.get("/team/accounts", dependencies=[Depends(admin)])
 def list_team_accounts():
     with db() as c:
-        return rows(c.execute('SELECT a."user",a.role,a.department_id,d.name AS department '
-                              'FROM admins a LEFT JOIN departments d ON d.id=a.department_id ORDER BY a."user"'))
+        return rows(c.execute('SELECT a."user",a.role,a.department_id,a.employee_id,e.name AS employee,d.name AS department '
+                              'FROM admins a LEFT JOIN departments d ON d.id=a.department_id LEFT JOIN employees e ON e.id=a.employee_id ORDER BY a."user"'))
 
 @app.patch("/team/accounts/{email}", dependencies=[Depends(admin)])
 def change_team_account(email: str, change: RoleChange):
@@ -878,8 +905,10 @@ def change_team_account(email: str, change: RoleChange):
             raise HTTPException(400, "Não é possível alterar a conta principal.")
         if department_id is not None and not c.execute("SELECT 1 FROM departments WHERE id=?", (department_id,)).fetchone():
             raise HTTPException(404, "Departamento não encontrado.")
-        c.execute('UPDATE admins SET role=?,department_id=? WHERE "user"=?',
-                  (change.role, department_id, email.lower()))
+        employee_id = change.employee_id if change.role == 'manager' else None
+        if change.role == 'manager': validate_manager_employee(c, employee_id, department_id)
+        c.execute('UPDATE admins SET role=?,department_id=?,employee_id=? WHERE "user"=?',
+                  (change.role, department_id, employee_id, email.lower()))
         c.execute('DELETE FROM sessions WHERE "user"=?', (email.lower(),))
     return {"ok": True}
 
@@ -1175,6 +1204,13 @@ def edit_employee(eid: int, p: EmployeePatch):
     data = {k: (int(v) if k in ("active", "department_id") else v) for k, v in p.model_dump().items() if v is not None}
     if not data: raise HTTPException(400, "Nada para atualizar.")
     with db() as c:
+        if 'active' in data and not data['active'] or 'department_id' in data:
+            lead = c.execute("SELECT 1 FROM departments WHERE lead_employee_id=?", (eid,)).fetchone()
+            manager = c.execute("SELECT 1 FROM admins WHERE employee_id=? AND role='manager'", (eid,)).fetchone()
+            current = c.execute("SELECT department_id FROM employees WHERE id=?", (eid,)).fetchone()
+            transfer = 'department_id' in data and current and data['department_id'] != current['department_id']
+            if (lead or manager) and (not data.get('active',1) or transfer):
+                raise HTTPException(409, "Substitua a chefia e remova ou transfira o acesso de gestor antes de alterar este funcionário.")
         cur = c.execute(f"UPDATE employees SET {','.join(k+'=?' for k in data)} WHERE id=?", (*data.values(), eid))
         if not cur.rowcount: raise HTTPException(404, "Funcionário não encontrado.")
     return {"ok": True}
@@ -1185,6 +1221,8 @@ def delete_employee(eid: int):
         employee = c.execute("SELECT id FROM employees WHERE id=?", (eid,)).fetchone()
         if not employee:
             raise HTTPException(404, "Funcionário não encontrado.")
+        if c.execute("SELECT 1 FROM departments WHERE lead_employee_id=?",(eid,)).fetchone() or c.execute("SELECT 1 FROM admins WHERE employee_id=? AND role='manager'",(eid,)).fetchone():
+            raise HTTPException(409, "Substitua a chefia e remova o acesso de gestor antes de desativar o funcionário.")
         c.execute("""UPDATE employees SET active=0,pin_salt=NULL,pin_hash=NULL,failed_pins=0,
                      account_email='',account_salt=NULL,account_hash=NULL WHERE id=?""", (eid,))
         c.execute("DELETE FROM sessions WHERE role='employee' AND subject_id=?", (eid,))
@@ -2023,33 +2061,58 @@ def delete_material(mid: int):
 
 # ---------- Departamentos ----------
 class DeptIn(BaseModel):
-    name: str; lead: str = ""
+    name: str = Field(min_length=1, max_length=160)
+    lead: str = ""
+    lead_employee_id: Optional[int] = None
+
+def department_lead(c, d, did=None):
+    if not d.name.strip(): raise HTTPException(400,"Informe o nome do departamento.")
+    employee_id = d.lead_employee_id
+    if employee_id is None and d.lead.strip():
+        matches = c.execute("SELECT id FROM employees WHERE active=1 AND lower(name)=lower(?)", (d.lead.strip(),)).fetchall()
+        if len(matches) != 1:
+            raise HTTPException(400, "Selecione um funcionário ativo cadastrado como chefe do departamento.")
+        employee_id = matches[0]['id']
+    if employee_id is None: return None, ''
+    e = c.execute("SELECT id,name,department_id FROM employees WHERE active=1 AND id=?", (employee_id,)).fetchone()
+    if not e: raise HTTPException(400, "Chefe deve ser um funcionário ativo cadastrado.")
+    if e['department_id'] is not None and e['department_id'] != did:
+        raise HTTPException(400, "O chefe já pertence a outro departamento. Transfira-o antes.")
+    return employee_id, e['name']
 
 @app.post("/departments", dependencies=[Depends(admin)], status_code=201)
 def add_dept(d: DeptIn):
     with db() as c:
-        cur = c.execute("INSERT INTO departments(name,lead) VALUES(?,?) RETURNING id", (d.name, d.lead))
-        department_id = cur.fetchall()[0]["id"]
+        c.execute('BEGIN IMMEDIATE')
+        eid, name = department_lead(c, d)
+        department_id = c.execute("INSERT INTO departments(name,lead,lead_employee_id) VALUES(?,?,?) RETURNING id", (d.name.strip(), name, eid)).fetchone()['id']
+        if eid: c.execute('UPDATE employees SET department_id=? WHERE id=?', (department_id,eid))
     return {"id": department_id}
 
 @app.get("/departments", dependencies=[Depends(admin)])
 def list_depts():
     with db() as c:
-        ds = rows(c.execute("SELECT * FROM departments ORDER BY name"))
-        counts = {r["department_id"]: r["n"] for r in c.execute(
-            "SELECT department_id, COUNT(*) n FROM employees WHERE active=1 GROUP BY department_id")}
-        return [{**d, "people": counts.get(d["id"], 0)} for d in ds]
+        ds = rows(c.execute("SELECT d.*,e.name AS registered_lead FROM departments d LEFT JOIN employees e ON e.id=d.lead_employee_id ORDER BY d.name"))
+        counts = {r["department_id"]:r["n"] for r in c.execute("SELECT department_id,COUNT(*) n FROM employees WHERE active=1 GROUP BY department_id")}
+        return [{**d, 'lead':d['registered_lead'] or '', 'legacy_lead':d['lead'] if not d['lead_employee_id'] else '', 'people':counts.get(d['id'],0)} for d in ds]
 
 @app.put("/departments/{did}", dependencies=[Depends(admin)])
 def edit_dept(did: int, d: DeptIn):
     with db() as c:
-        cur = c.execute("UPDATE departments SET name=?,lead=? WHERE id=?", (d.name, d.lead, did))
-        if not cur.rowcount: raise HTTPException(404, "Departamento não encontrado.")
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT 1 FROM departments WHERE id=?',(did,)).fetchone(): raise HTTPException(404,"Departamento não encontrado.")
+        eid, name = department_lead(c,d,did)
+        c.execute("UPDATE departments SET name=?,lead=?,lead_employee_id=? WHERE id=?", (d.name.strip(),name,eid,did))
+        if eid: c.execute('UPDATE employees SET department_id=? WHERE id=?',(did,eid))
     return {"ok": True}
 
 @app.delete("/departments/{did}", dependencies=[Depends(admin)])
 def delete_dept(did: int):
     with db() as c:
+        if c.execute("SELECT 1 FROM dre_import_entries WHERE department_id=?",(did,)).fetchone():
+            raise HTTPException(409,"Departamento possui lançamentos contábeis importados e deve ser preservado.")
+        if c.execute("SELECT 1 FROM admins WHERE role='manager' AND department_id=?", (did,)).fetchone():
+            raise HTTPException(409, "Remova ou transfira os acessos de gestor antes de excluir o departamento.")
         c.execute("UPDATE employees SET department_id=NULL WHERE department_id=?", (did,))
         c.execute("DELETE FROM departments WHERE id=?", (did,))
     return {"ok": True}
@@ -2457,7 +2520,7 @@ def clock_live(b: Live, request: Request):
 
 class Sample(BaseModel):
     lat: float = Field(ge=-90, le=90); lng: float = Field(ge=-180, le=180)
-    accuracy_m: float = Field(default=0, ge=0); ts_ms: int = 0
+    accuracy_m: float = Field(default=0, ge=0, allow_inf_nan=False); ts_ms: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 class Clock(BaseModel):
     employee_id: int; pin: str
@@ -2488,6 +2551,7 @@ def record_clock(b: Clock, request: Request, background: BackgroundTasks,
         raise HTTPException(400, "É preciso autorizar o uso da localização para bater ponto.")
     now = utcnow(); now_ms = now.timestamp() * 1000
     with db() as c:
+        c.execute("BEGIN IMMEDIATE")
         e = (check_employee(c, b.employee_id, b.pin) if employee_id is None else
              c.execute("SELECT * FROM employees WHERE id=? AND active=1", (employee_id,)).fetchone())
         if not e:
@@ -2518,6 +2582,10 @@ def record_clock(b: Clock, request: Request, background: BackgroundTasks,
                 if 0 < dt < 3600 and haversine(prev["lat"], prev["lng"], best.lat, best.lng) / dt > MAX_SPEED_MS:
                     reason = "Deslocamento impossível desde o último registro. Procure o gestor."
         ok = not reason
+        if ok:
+            last_accepted = c.execute("SELECT at FROM time_entries WHERE employee_id=? AND accepted=1 ORDER BY id DESC LIMIT 1",(e['id'],)).fetchone()
+            if last_accepted and 0 <= (now-datetime.fromisoformat(last_accepted['at'])).total_seconds() < 30:
+                raise HTTPException(409, "Ponto já registrado há menos de 30 segundos. Aguarde antes de registrar novamente.")
 
         a, z = day_range(local(now).date())
         n = c.execute("SELECT COUNT(*) FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<?",
@@ -2550,7 +2618,7 @@ def record_clock(b: Clock, request: Request, background: BackgroundTasks,
                   " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (e["id"], kind, at, best.lat, best.lng, round(dist, 1), int(ok), reason, e["cpf"], nsr, prev_h, h,
                    len(b.samples), round(spread, 1), task_id, e["salary"] / 220))
-        if task_id is not None and kind == "saida":
+        if ok and task_id is not None and kind == "saida":
             run_task_automations(c, task_id, background)
     if not ok: raise HTTPException(403, reason)
     return {"kind": kind, "at": at, "distance_m": round(dist), "nsr": nsr, "hash": h,
@@ -2592,7 +2660,9 @@ def verify_entries():
 
 def csv_safe(v):
     v = str(v if v is not None else "")
-    return "'" + v if v[:1] in "=+-@" else v
+    candidate = v.lstrip(' \t\r\n')
+    dangerous = bool(candidate) and candidate[0] in '=+-@'
+    return "'" + v if dangerous else v
 
 @app.get("/time-entries/export.csv", dependencies=[Depends(admin)])
 def export_entries(month: Optional[str] = None):
@@ -2640,6 +2710,10 @@ def dashboard():
         n_mat = c.execute("SELECT COUNT(*) FROM materials").fetchone()[0]
         n_dep = c.execute("SELECT COUNT(*) FROM departments").fetchone()[0]
         n_sp = c.execute("SELECT COUNT(*) FROM spaces").fetchone()[0]
+        setup_completed = settings(c).get('setup_completed') == '1'
+        if not setup_completed and all((wp,emps,prods,sum(tasks.values()),n_mat,n_sp)):
+            c.execute("INSERT INTO settings(k,v) VALUES('setup_completed','1') ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+            setup_completed = True
     employee_overtime = {}
     hours_worked = overtime_hours = 0
     for employee in emps:
@@ -2706,7 +2780,7 @@ def dashboard():
                         "company_cost": canonical_payroll["total_company_cost"]},
             "setup": {"workplace": wp, "employees": bool(emps), "products": bool(prods), "tasks": bool(sum(tasks.values())),
                       "materials": bool(n_mat), "departments": bool(n_dep), "spaces": bool(n_sp)},
-            "dre": dre, "lots": lots}
+            "setup_completed": setup_completed, "dre": dre, "lots": lots}
 
 business.register_routes(sys.modules[__name__])
 

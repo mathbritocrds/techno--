@@ -44,6 +44,8 @@ TABLES = (
     "payment_attachments",
     "space_staff_rules",
     "event_staff_assignments",
+    "dre_import_batches",
+    "dre_import_entries",
 )
 
 
@@ -81,6 +83,7 @@ def main():
                     + ". A importação não sobrescreve dados."
                 )
 
+            employee_links = []
             for table in TABLES:
                 if table not in source_tables:
                     counts[table] = 0
@@ -89,6 +92,11 @@ def main():
                 columns = [column for column in records[0].keys()] if records else [
                     column[1] for column in source.execute(f"PRAGMA table_info({quoted(table)})")
                 ]
+                link_column = {'admins':'employee_id','departments':'lead_employee_id'}.get(table)
+                if link_column and link_column in columns:
+                    key_column = 'user' if table=='admins' else 'id'
+                    employee_links.extend((table,link_column,key_column,r[key_column],r[link_column]) for r in records if r[link_column] is not None)
+                    columns.remove(link_column)
                 if records:
                     column_sql = ", ".join(quoted(column) for column in columns)
                     values_sql = ", ".join(["%s"] * len(columns))
@@ -103,6 +111,9 @@ def main():
                         f"COALESCE(MAX(id), 1), COUNT(*) > 0) FROM {quoted(table)}",
                         (f"public.{table}",),
                     )
+
+            for table, column, key_column, key, eid in employee_links:
+                cursor.execute(f"UPDATE {quoted(table)} SET {quoted(column)}=%s WHERE {quoted(key_column)}=%s",(eid,key))
 
     print("Migração concluída. Registros copiados:")
     for table, count in counts.items():

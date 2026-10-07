@@ -121,7 +121,7 @@ def test_front_end_e_servido():
     assert "/ai/fill-mask" not in page
     assert "Resumir com IA" not in page and "finance/department-summary" not in page
 
-def test_ponto_tempo_real_e_comprovante(auth, ana):
+def test_ponto_tempo_real_e_comprovante(auth, ana, monkeypatch):
     live = client.post("/clock/live", json={"employee_id": ana, "pin": "1234", "lat": -23.5501, "lng": -46.6301, "accuracy_m": 10}).json()
     assert live["inside"] and live["distance_m"] < 100
     far = client.post("/clock/live", json={"employee_id": ana, "pin": "1234", "lat": -23.60, "lng": -46.63, "accuracy_m": 10}).json()
@@ -129,6 +129,10 @@ def test_ponto_tempo_real_e_comprovante(auth, ana):
     r1 = bater(ana).json()
     assert r1["kind"] == "entrada" and r1["nsr"] == 1
     assert r1["comprovante"]["empresa"]["cnpj"] == "12345678000199" and len(r1["hash"]) == 64
+    assert bater(ana).status_code == 409
+    from datetime import timedelta
+    recorded = main.utcnow()
+    monkeypatch.setattr(main, "utcnow", lambda: recorded+timedelta(seconds=31))
     assert bater(ana).json()["kind"] == "saida"
 
 def test_ponto_exige_consentimento(ana):
@@ -185,7 +189,7 @@ def test_contas_de_funcionario_e_mensagens_isoladas(auth, ana):
     ana_auth = {"Authorization": "Bearer " + ana_login.json()["token"]}
     bob_auth = {"Authorization": "Bearer " + bob_login.json()["token"]}
 
-    assert client.get("/dashboard", headers=ana_auth).status_code == 401
+    assert client.get("/dashboard", headers=ana_auth).status_code == 403
     assert client.post("/auth/register", json={"email": "intruso@flux.test", "password": "senha-segura",
                                                 "company_name": "Flux Ltda"}, headers=ana_auth).status_code == 401
     assert client.post("/messages", json={"scope": "team", "body": "Aviso para toda a equipe"}, headers=auth).status_code == 201
@@ -391,10 +395,11 @@ def test_dashboard_indicadores_series_e_alertas(auth):
 
 
 def test_manager_so_pode_acessar_quadro_e_aprovar(auth):
+    eid=client.post("/employees",json={"name":"Gestor do quadro","salary":3000,"pin":"1234"},headers=auth).json()["id"]
     account = client.post(
         "/auth/register",
         json={"email": "gestor-quadro@flux.test", "password": "senha-gestor-segura",
-              "company_name": "Flux Ltda", "cnpj": "12345678000199", "role": "manager"},
+              "company_name": "Flux Ltda", "cnpj": "12345678000199", "role": "manager", "employee_id":eid},
         headers=auth,
     )
     assert account.status_code == 201
@@ -405,8 +410,8 @@ def test_manager_so_pode_acessar_quadro_e_aprovar(auth):
 
     assert login["role"] == "manager"
     assert client.get("/tasks", headers=manager_headers).status_code == 200
-    assert client.get("/dashboard", headers=manager_headers).status_code == 401
-    assert client.get("/finance", headers=manager_headers).status_code == 401
+    assert client.get("/dashboard", headers=manager_headers).status_code == 403
+    assert client.get("/finance", headers=manager_headers).status_code == 403
     approval = client.post(f"/tasks/{task_id}/approval", json={"decision": "aprovado"},
                            headers=manager_headers)
     assert approval.status_code == 200 and approval.json()["approval"] == "aprovado"
@@ -558,10 +563,11 @@ def test_automacao_checklist_solicita_aprovacao(auth):
 def test_agenda_compartilhada_evitar_conflitos_e_limitar_setor(auth):
     department_id = client.post("/departments", json={"name": "Agenda Produção"}, headers=auth).json()["id"]
     space_id = client.post("/spaces", json={"name": "Bancada CNC"}, headers=auth).json()["id"]
+    eid=client.post("/employees",json={"name":"Gestor agenda","salary":3000,"pin":"1234","department_id":department_id},headers=auth).json()["id"]
     created = client.post("/auth/register", json={"email": "agenda-manager@flux.test",
                              "password": "senha-agenda-segura", "company_name": "Flux Ltda",
                              "cnpj": "12345678000199", "role": "manager",
-                             "department_id": department_id}, headers=auth)
+                             "department_id": department_id, "employee_id":eid}, headers=auth)
     assert created.status_code == 201
     token = client.post("/auth/login", json={"email": "agenda-manager@flux.test",
                              "password": "senha-agenda-segura"}).json()["token"]

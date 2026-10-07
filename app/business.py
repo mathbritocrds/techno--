@@ -317,26 +317,8 @@ def register_routes(m):
             raise HTTPException(404, 'Comprovante não encontrado.')
         return Response(base64.b64decode(file['content']), media_type=file['mime'], headers={'Content-Disposition': "attachment; filename*=UTF-8''"+m.quote(file['name']), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
 
-    @app.get('/finance/dre', dependencies=[Depends(m.admin)])
-    def dre(start: str, end: str):
-        month_or_error(start)
-        month_or_error(end)
-        if start > end or int(end[:4])*12+int(end[5:])-int(start[:4])*12-int(start[5:]) > 119:
-            raise HTTPException(400, 'Intervalo inválido ou superior a dez anos.')
-        with m.db() as c:
-            tx = m.rows(c.execute("SELECT * FROM transactions WHERE (CASE WHEN competence='' THEN substr(due,1,7) ELSE competence END)>=? AND (CASE WHEN competence='' THEN substr(due,1,7) ELSE competence END)<=?", (start, end)))
-            runs = m.rows(c.execute('SELECT * FROM payroll_runs WHERE month>=? AND month<=?', (start, end)))
-            personnel = sum(json.loads(r['snapshot'])['accrual_cost'] for run in runs for r in c.execute('SELECT snapshot FROM payroll_items WHERE run_id=?', (run['id'],)))
-        totals = {key: 0 for key in ('revenue', 'cost', 'operating', 'personnel', 'tax', 'financial')}
-        for t in tx:
-            if t['source_key'].startswith('payroll:'):
-                continue
-            key = 'revenue' if t['kind'] == 'receber' else t['category']
-            totals[key if key in totals else 'operating'] += t['amount']
-        totals['personnel'] += personnel
-        gross_profit = totals['revenue']-totals['tax']-totals['cost']
-        net_profit = gross_profit-totals['operating']-totals['personnel']-totals['financial']
-        return {'start': start, 'end': end, **{k: hr.money(v) for k, v in totals.items()}, 'gross_profit': hr.money(gross_profit), 'net_profit': hr.money(net_profit), 'net_margin_pct': round(net_profit/totals['revenue']*100, 2) if totals['revenue'] else 0, 'closed_payroll_months': [r['month'] for r in runs], 'basis': 'competence', 'note': 'Pessoal inclui apenas folhas fechadas e despesas avulsas de pessoal. Competências sem fechamento não incluem a folha.'}
+    from app import financial_reports
+    financial_reports.register_routes(m)
 
     @app.get('/spaces/{sid}/staff-rules', dependencies=[Depends(m.admin)])
     def staff_rules(sid: int):
