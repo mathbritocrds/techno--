@@ -36,6 +36,14 @@ TABLES = (
     "role_permissions",
     "audit_log",
     "notification_channels",
+    "employee_payroll_profiles",
+    "payroll_runs",
+    "payroll_items",
+    "vacation_records",
+    "payment_history",
+    "payment_attachments",
+    "space_staff_rules",
+    "event_staff_assignments",
 )
 
 

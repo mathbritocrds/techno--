@@ -73,3 +73,9 @@ Anexos ficam no banco de dados e são disponibilizados apenas como download aute
 pip install -r requirements-dev.txt
 pytest -q
 ```
+
+## RH, DRE, pagamentos e eventos
+
+Consulte [arquitetura, rotas, modelo de dados e regras de cálculo](docs/modulos-rh-financeiro-eventos.md). Em Folha, configure RH/benefícios e feche a competência para gerar os salários no financeiro. Financeiro inclui DRE e comprovantes no histórico. Espaços permite eventos compatíveis dentro da capacidade e gera escalas com a equipe vinculada. O desenho original das telas foi preservado. As regras fiscais cadastradas cobrem 2026; férias e 13º têm cálculo bruto e provisões, com as limitações de liquidação descritas na documentação.
+
+`npm run build` valida e empacota a aplicação FastAPI em `dist/sigi`. `npm run preview:restart` verifica esse pacote; `npm run test:business` executa os testes Python.

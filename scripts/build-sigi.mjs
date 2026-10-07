@@ -1,0 +1,13 @@
+import { cpSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { Script } from 'node:vm';
+const result = spawnSync('python', ['-m', 'compileall', '-q', 'app'], { stdio: 'inherit' });
+if (result.status !== 0) process.exit(result.status ?? 1);
+for (const [index, script] of [...readFileSync('app/static/index.html','utf8').matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].entries()) new Script(script[1], { filename: `index-inline-${index}.js` });
+new Script(readFileSync('app/static/business.js','utf8'), { filename: 'business.js' });
+rmSync('dist/sigi', { recursive: true, force: true });
+mkdirSync('dist/sigi', { recursive: true });
+cpSync('app','dist/sigi/app',{recursive:true,filter:source=>!source.includes('__pycache__')});
+cpSync('supabase','dist/sigi/supabase',{recursive:true});
+cpSync('requirements.txt','dist/sigi/requirements.txt');
+console.log('SIGI production package built: dist/sigi');
