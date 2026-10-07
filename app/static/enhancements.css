@@ -1,0 +1,18 @@
+/* Compact sectors keep the original palette, cards and typography. */
+.nav-chevron{display:inline-block;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 2px 3px 9px;transition:transform .2s var(--ease)}
+[aria-expanded=true] .nav-chevron{transform:rotate(225deg);margin-bottom:0}
+.sector-submenu{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .22s var(--ease),opacity .22s var(--ease)}
+.sector-submenu.open{grid-template-rows:1fr;opacity:1}
+.submenu-items{overflow:hidden;display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:0;padding:0 4px;transition:padding .22s var(--ease)}
+.sector-submenu.open .submenu-items{padding:4px 4px 12px}
+.submenu-items .chip{min-height:40px;flex:none}.submenu-items .on{background:var(--g);color:var(--bg);border-color:var(--g)}
+.dre-controls label{display:grid;gap:4px;flex:1;min-width:140px}.dre-controls input,.dre-controls select{width:100%;min-width:0}
+.dash-bar-name{overflow-wrap:anywhere}.dash-charts .card{min-width:0}
+@media(max-width:720px){.app>nav{flex-wrap:wrap;overflow:visible}.app>nav #tabs{order:2;width:100%;overflow-x:auto;border-radius:14px}.app>nav .sp{flex:1}.app>nav .tabs button{min-height:44px;padding:8px 11px}.app>nav .motion-control,.app>nav .offline-indicator{display:none}.sector-submenu.open .submenu-items{padding-top:8px}.dre-controls label{min-width:120px}}
+@media print{.sector-submenu{display:none}}
+
+[data-dre-charts]{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
+.chip:has(input[type=file]){position:relative;cursor:pointer}
+.chip input[type=file]{position:absolute;width:1px;height:1px;opacity:0;padding:0;margin:0;overflow:hidden}
+.chip:focus-within{outline:2px solid var(--b);outline-offset:2px}
+@media(max-width:720px){.app>nav #employeeTabs{order:2;width:100%;max-width:100%;overflow-x:auto;border-radius:14px}}

@@ -165,3 +165,140 @@ def test_vacation_balance_quote_and_consumption(service):
     p = client.get('/payroll?month=2026-03',headers=auth).json()['employees'][0]
     assert p['vacation_cycles'][0]['remaining_days'] == 0
     assert client.put(f'/employees/{eid}/payroll-profile',json={'hired_on':'2026-10-40'},headers=auth).status_code == 422
+
+
+def test_inss_requested_table_boundaries_and_cap():
+    expected={0:0,1621:121.58,1621.01:121.58,2902.84:236.94,2902.85:236.94,4354.27:411.11,4354.28:411.11,8475.55:988.09,8475.56:988.09,100000:988.09}
+    for gross,discount in expected.items(): assert hr.inss(gross)==discount
+    rules=hr.tax_rules('2026-10')
+    assert rules['inss_offsets']==[0,24.32,111.40,198.49] and rules['inss_max']==988.09
+
+
+def test_fractional_gps_timestamp_and_duplicate_clock(service,monkeypatch):
+    from datetime import timedelta
+    client,auth=service;eid=employee(service)
+    client.put('/settings/workplace',json={'lat':-23.55,'lng':-46.63,'radius_m':100},headers=auth)
+    client.post(f'/employees/{eid}/account',json={'email':'clock@test.com','password':'clock-test-password'},headers=auth)
+    token=client.post('/auth/employee/login',json={'email':'clock@test.com','password':'clock-test-password'}).json()['token']
+    employee_auth={'Authorization':'Bearer '+token}
+    sample={'lat':-23.55,'lng':-46.63,'accuracy_m':10,'ts_ms':main.utcnow().timestamp()*1000+.125}
+    first=client.post('/employee/clock',json={'consent':True,'samples':[sample]},headers=employee_auth)
+    assert first.status_code==200 and first.json()['kind']=='entrada'
+    assert client.post('/employee/clock',json={'consent':True,'samples':[sample]},headers=employee_auth).status_code==409
+    now=main.utcnow();monkeypatch.setattr(main,'utcnow',lambda:now+timedelta(seconds=31))
+    last=client.post('/employee/clock',json={'consent':True,'samples':[sample]},headers=employee_auth)
+    assert last.status_code==200 and last.json()['kind']=='saida'
+    assert client.get('/time-entries/verify',headers=auth).json()['ok']
+
+
+def test_concurrent_clock_serializes_nsr(service):
+    from concurrent.futures import ThreadPoolExecutor
+    client,auth=service;eid=employee(service)
+    client.put('/settings/workplace',json={'lat':0,'lng':0,'radius_m':100},headers=auth)
+    payload={'employee_id':eid,'pin':'1234','consent':True,'samples':[{'lat':0,'lng':0,'accuracy_m':10}]}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses=list(pool.map(lambda _:client.post('/clock',json=payload),range(2)))
+    assert sorted(r.status_code for r in responses)==[200,409]
+    assert client.get('/time-entries/verify',headers=auth).json()['checked']==1
+
+
+def test_dre_import_preview_atomicity_export_and_roundtrip(service):
+    client,auth=service
+    did=client.post('/departments',json={'name':'Produção'},headers=auth).json()['id']
+    content=f'origem;referencia;ano;mes;setor_id;categoria;descricao;valor\nimport;rev1;2026;02;{did};revenue;Venda;1000,00\nimport;exp1;2026;02;{did};cost;Materiais;250,00\n'
+    preview=client.post('/finance/dre/import',json={'content':content},headers=auth).json()
+    assert preview['accepted']==2 and not preview['errors']
+    assert client.get('/finance/dre?start=2026-02&end=2026-02',headers=auth).json()['revenue']==0
+    invalid=content+'import;invalid;2026;13;;cost;Inválido;100\n'
+    assert client.post('/finance/dre/import',json={'content':invalid,'preview':False},headers=auth).status_code==400
+    imported=client.post('/finance/dre/import',json={'content':content,'preview':False},headers=auth).json()
+    assert imported['imported']==2
+    assert client.post('/finance/dre/import',json={'content':content,'preview':False},headers=auth).json()['imported']==0
+    result=client.get('/finance/dre?start=2026-02&end=2026-02',headers=auth).json()
+    assert result['net_profit']==750 and result['net_margin_pct']==75
+    cost=next(r for r in result['breakdown'] if r['category']=='cost')
+    assert cost['expense_pct']==100 and cost['revenue_pct']==25
+    csv_file=client.get('/finance/dre/export.csv?start=2026-02&end=2026-02',headers=auth)
+    assert csv_file.status_code==200 and 'percentual_gastos' in csv_file.text
+    assert client.post('/finance/dre/import',json={'content':csv_file.text,'preview':False},headers=auth).json()['imported']==0
+    filtered=client.get(f'/finance/dre?start=2026-02&end=2026-02&category=cost&department_id={did}',headers=auth).json()
+    assert filtered['revenue']==1000 and len(filtered['breakdown'])==1
+    assert client.post('/finance/dre/import',json={'content':content.replace('250,00','300,00'),'preview':False},headers=auth).status_code==400
+    assert client.get('/finance',headers=auth).json()==[]  # Accounting import creates no payable.
+
+
+def test_manager_employee_requirement_and_scoped_finance(service):
+    client,auth=service
+    did=client.post('/departments',json={'name':'Gestão'},headers=auth).json()['id']
+    other=client.post('/departments',json={'name':'Outro'},headers=auth).json()['id']
+    payload={'email':'manager@test.com','password':'manager-test-password','role':'manager','department_id':did}
+    assert client.post('/auth/register',json=payload,headers=auth).status_code==400
+    eid=employee(service)
+    assert client.post('/auth/register',json={**payload,'employee_id':eid},headers=auth).status_code==400
+    client.patch(f'/employees/{eid}',json={'department_id':did},headers=auth)
+    assert client.post('/auth/register',json={**payload,'employee_id':eid},headers=auth).status_code==201
+    token=client.post('/auth/login',json={'email':payload['email'],'password':payload['password']}).json()['token']
+    manager={'Authorization':'Bearer '+token}
+    assert client.get('/finance',headers=manager).status_code==403
+    assert client.get('/finance/dre?start=2026-02&end=2026-02',headers=manager).status_code==200
+    assert client.get(f'/finance/dre?start=2026-02&end=2026-02&department_id={other}',headers=manager).status_code==403
+    content=f'ano;mes;setor_id;categoria;descricao;valor\n2026;02;{other};cost;Outro setor;200\n'
+    assert client.post('/finance/dre/import',json={'content':content,'preview':False},headers=manager).status_code==400
+    content='ano;mes;categoria;descricao;valor\n2026;02;cost;Meu setor;200\n'
+    assert client.post('/finance/dre/import',json={'content':content,'preview':False},headers=manager).json()['imported']==1
+    report=client.get('/finance/dre?start=2026-02&end=2026-02',headers=manager).json()
+    assert report['cost']==200 and report['breakdown'][0]['department_id']==did
+    assert report['net_margin_pct'] is None
+    assert client.delete(f'/employees/{eid}',headers=auth).status_code==409
+    assert client.get('/finance/dre/export.csv?start=2026-02&end=2026-02',headers=manager).status_code==200
+
+
+def test_department_head_must_be_registered_and_active(service):
+    client,auth=service;eid=employee(service)
+    assert client.post('/departments',json={'name':'Setor','lead':'Pessoa não cadastrada'},headers=auth).status_code==400
+    did=client.post('/departments',json={'name':'Setor','lead_employee_id':eid},headers=auth).json()['id']
+    assert client.get('/departments',headers=auth).json()[0]['lead_employee_id']==eid
+    assert client.delete(f'/employees/{eid}',headers=auth).status_code==409
+    assert client.patch(f'/employees/{eid}',json={'active':False},headers=auth).status_code==409
+    client.put(f'/departments/{did}',json={'name':'Setor','lead_employee_id':None},headers=auth)
+    assert client.delete(f'/employees/{eid}',headers=auth).status_code==200
+    assert client.put(f'/departments/{did}',json={'name':'Setor','lead_employee_id':eid},headers=auth).status_code==400
+
+
+def test_onboarding_completion_is_durable_and_financial_page_endpoints(service):
+    client,auth=service;employee(service)
+    assert not client.get('/dashboard',headers=auth).json()['setup_completed']
+    client.put('/settings/workplace',json={'lat':0,'lng':0},headers=auth)
+    client.post('/products',json={'name':'Produto'},headers=auth)
+    client.post('/materials',json={'name':'Material'},headers=auth)
+    client.post('/tasks',json={'title':'Primeira tarefa'},headers=auth)
+    sid=client.post('/spaces',json={'name':'Espaço'},headers=auth).json()['id']
+    assert client.get('/dashboard',headers=auth).json()['setup_completed']
+    client.delete(f'/spaces/{sid}',headers=auth)
+    assert client.get('/dashboard',headers=auth).json()['setup_completed']
+    for path in ['/finance/summary','/finance?status=open','/departments','/finance/department-costs?month=2026-10','/finance/dre?start=2026-10&end=2026-10','/finance/payments?month=2026-10']:
+        assert client.get(path,headers=auth).status_code==200
+
+
+def test_employee_counter_does_not_count_open_shift_twice(service,monkeypatch):
+    from datetime import timedelta
+    client,auth=service;eid=employee(service)
+    client.post(f'/employees/{eid}/account',json={'email':'counter@test.com','password':'counter-password'},headers=auth)
+    token=client.post('/auth/employee/login',json={'email':'counter@test.com','password':'counter-password'}).json()['token']
+    now=main.utcnow()
+    with main.db() as c:
+        c.execute('INSERT INTO time_entries(employee_id,kind,at,lat,lng,distance_m,accepted) VALUES(?,?,?,?,?,?,1)',(eid,'entrada',main.iso(now-timedelta(minutes=10)),0,0,0))
+    monkeypatch.setattr(main,'utcnow',lambda:now)
+    summary=client.get('/employee/summary',headers={'Authorization':'Bearer '+token}).json()
+    assert summary['worked_minutes']==10 and summary['completed_seconds']==0 and summary['on_clock']
+
+
+def test_dre_rejects_conflicting_references_and_csv_formula_roundtrip(service):
+    client,auth=service
+    content='ano;mes;categoria;descricao;valor;referencia\n2026;10;cost;=SUM(1);100;external-1\n'
+    conflict=content+'2026;10;cost;=SUM(1);200;external-1\n'
+    assert client.post('/finance/dre/import',json={'content':conflict,'preview':False},headers=auth).status_code==400
+    assert client.post('/finance/dre/import',json={'content':content,'preview':False},headers=auth).json()['imported']==1
+    exported=client.get('/finance/dre/export.csv?start=2026-10&end=2026-10',headers=auth).text
+    assert "'=SUM(1)" in exported
+    assert client.post('/finance/dre/import',json={'content':exported,'preview':False},headers=auth).json()['imported']==0

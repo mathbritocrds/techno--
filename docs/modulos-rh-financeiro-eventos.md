@@ -64,7 +64,7 @@ O DDL executável completo está em `app/business_schema.py` para SQLite e `supa
 | `spaces` | Novas colunas capacidade e compartilhamento |
 | `space_bookings` | Novas colunas status, participantes, exclusividade, compatibilidade e detalhes |
 
-A DRE é uma consulta derivada de lançamentos e snapshots; não mantém uma segunda cópia de valores financeiros. Anexos ficam no banco, seguindo o padrão existente; tipos são validados pelo conteúdo binário e o SHA-256 permite identificar o arquivo. A API não oferece remoção de pagamentos, snapshots ou comprovantes. Isso preserva o histórico operacional, mas não substitui armazenamento externo imutável contra administradores do banco.
+A DRE é uma consulta derivada de lançamentos e snapshots. Lançamentos externos importados são armazenados nas tabelas próprias descritas em [Navegação, DRE e ponto](navegacao-dre-ponto.md), sem copiar novamente contas ou folhas. Anexos ficam no banco, seguindo o padrão existente; tipos são validados pelo conteúdo binário e o SHA-256 permite identificar o arquivo. A API não oferece remoção de pagamentos, snapshots ou comprovantes. Isso preserva o histórico operacional, mas não substitui armazenamento externo imutável contra administradores do banco.
 
 Para migrar de SQLite ao Supabase, `scripts/migrate_to_supabase.py` inclui as oito tabelas novas e preserva IDs e relações. Faça backup antes de aplicar em produção. O schema PostgreSQL foi executado duas vezes em PostgreSQL embarcado (PGlite), verificando sintaxe e idempotência; a conexão com o Supabase de produção não foi executada.
 
@@ -118,3 +118,7 @@ Vínculos de preparação, atendimento e manutenção geram escalas por evento. 
 - [FGTS — recolhimento do empregado](https://www.fgts.gov.br/Paginas/subpaginas/recolhimento-empregado.aspx)
 - [Decreto 10.854/2021 — regras de vale-transporte](https://www2.camara.leg.br/legin/fed/decret/2021/decreto-10854-10-novembro-2021-791950-normaatualizada-pe.html)
 - [Ministério do Trabalho — 13º e férias](https://www.gov.br/trabalho-e-emprego/pt-br/acesso-a-informacao/acoes-e-programas/programas-projetos-acoes-obras-e-atividades/proteja/duvidas-frequentes)
+
+## Atualização complementar
+
+Veja [Navegação, DRE e ponto](navegacao-dre-ponto.md) para submenus, importação/exportação CSV, chefia vinculada a funcionário, correções de GPS, gráficos e a tabela INSS com teto explícito de R$ 988,09.
