@@ -232,7 +232,7 @@ def test_custeio_e_folha(auth, ana):
     mesa = [p for p in client.get("/products", headers=auth).json() if p["name"] == "Mesa"][0]
     assert mesa["cost"] == 475 and mesa["margin_pct"] == 39.9
     p = [e for e in client.get("/payroll?month=2026-08", headers=auth).json()["employees"] if e["name"] == "Ana"][0]
-    assert p["inss"] == 550 and p["net"] == 4950 and p["company_cost"] == 6900
+    assert p["inss"] == 501.51 and p["irrf"] == 0 and p["net"] == 4998.49 and p["company_cost"] == 6900
 
 def test_financeiro_e_fluxo_de_caixa(auth, ana):
     client.post("/finance", json={"kind": "receber", "description": "Cliente A", "amount": 10000, "due": "2020-01-10"}, headers=auth)

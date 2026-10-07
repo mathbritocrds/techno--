@@ -3,7 +3,7 @@ Rodar (na raiz do repositório):  uvicorn app.main:app --reload
 Docs:   http://localhost:8000/docs
 """
 import base64, binascii, csv, hashlib, hmac, io, logging, math, os, secrets, sqlite3, time
-import asyncio, json
+import asyncio, json, sys
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -20,6 +20,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import connect_postgres
+from app.business_schema import SCHEMA as BUSINESS_SCHEMA, MIGRATIONS as BUSINESS_MIGRATIONS
+from app import payroll as hr
+from app import business
 from app.security import generate_totp_secret, provisioning_uri, verify_totp
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -165,6 +168,9 @@ MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
               "ALTER TABLE time_entries ADD COLUMN task_id INTEGER",
               "ALTER TABLE time_entries ADD COLUMN labor_rate REAL"]
 
+SCHEMA += BUSINESS_SCHEMA
+MIGRATIONS += BUSINESS_MIGRATIONS
+
 @contextmanager
 def db():
     if SUPABASE_DATABASE_URL:
@@ -193,6 +199,11 @@ with db() as c:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_nsr ON time_entries(nsr) WHERE nsr IS NOT NULL")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_employee_account_email ON employees(lower(account_email)) WHERE account_email IS NOT NULL AND account_email != ''")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_username ON admins(lower(username)) WHERE username != ''")
+
+with db() as c:
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_transaction_source ON transactions(source_key) WHERE source_key<>''")
+    c.execute("UPDATE transactions SET category='revenue' WHERE kind='receber' AND category='operating'")
+    c.execute("INSERT INTO payment_history(transaction_id,kind,description,amount,category,competence,paid_at,actor,department_id,source_key) SELECT id,kind,description,amount,category,CASE WHEN competence='' THEN substr(due,1,7) ELSE competence END,COALESCE(paid_at,due||'T12:00:00+00:00'),'legacy-import',department_id,source_key FROM transactions WHERE paid=1 AND NOT EXISTS (SELECT 1 FROM payment_history h WHERE h.transaction_id=transactions.id) ON CONFLICT(transaction_id) DO NOTHING")
 
 app = FastAPI(title="SIGI Gestão API")
 
@@ -251,7 +262,7 @@ def permission_delegable(role, module, permission):
     if module == "tasks":
         return permission in ({"view", "approve"} if role == "manager" else {"view"})
     if module == "spaces":
-        return permission in ({"view", "create", "delete"} if role == "manager" else {"view"})
+        return permission in ({"view", "create", "edit", "delete"} if role == "manager" else {"view"})
     if module == "approvals":
         return role == "manager" and permission in {"view", "approve"}
     if module == "messages":
@@ -261,7 +272,7 @@ DEFAULT_PERMISSIONS = {
     ("manager", "tasks", "view"): True, ("manager", "tasks", "approve"): True,
     ("manager", "approvals", "view"): True, ("manager", "approvals", "approve"): True,
     ("manager", "spaces", "view"): True, ("manager", "spaces", "create"): True,
-    ("manager", "spaces", "delete"): True,
+    ("manager", "spaces", "delete"): True, ("manager", "spaces", "edit"): True,
     ("operator", "tasks", "view"): True, ("operator", "spaces", "view"): True,
 }
 
@@ -682,17 +693,14 @@ def employee_payroll(month: Optional[str] = None, who=Depends(employee_principal
     with db() as c:
         employee = c.execute("SELECT * FROM employees WHERE id=? AND active=1",
                              (who["employee_id"],)).fetchone()
-        ts = timesheet_data(c, ym).get(who["employee_id"])
     if not employee:
         raise HTTPException(401, "Conta de funcionário inativa.")
-    overtime_hours = round(ts["overtime"], 2) if ts else 0.0
-    overtime_pay = round(overtime_hours * (employee["salary"] / 220) * OVERTIME_RATE, 2)
-    gross = employee["salary"] + overtime_pay
-    deduction = inss(gross)
-    return {"month": ym, "name": employee["name"], "role": employee["role"],
-            "base_salary": employee["salary"], "overtime_hours": overtime_hours,
-            "overtime_pay": overtime_pay, "gross": round(gross, 2), "inss": round(deduction, 2),
-            "benefits": employee["benefits"], "net": round(gross - deduction + employee["benefits"], 2)}
+    data = business.payroll_data(sys.modules[__name__], ym)
+    item = next((e for e in data['employees'] if e['id'] == who['employee_id']), None)
+    if item is None:
+        raise HTTPException(404, "Sem folha para a competência.")
+    allowed = ('name','role','base_salary','overtime_hours','overtime_pay','gross','inss','irrf','benefits','net','vt_amount','vt_discount','va_amount','va_discount','fgts','fgts_accumulated','thirteenth_proportional','vacation_total')
+    return {"month": ym, "closed": data['closed'], **{k: item[k] for k in allowed}}
 
 @app.get("/employee/tasks")
 def employee_tasks(who=Depends(employee_principal)):
@@ -709,7 +717,7 @@ def employee_tasks(who=Depends(employee_principal)):
 @app.get("/employee/spaces")
 def employee_spaces(start: Optional[str] = None, end: Optional[str] = None,
                     who=Depends(employee_principal)):
-    conditions, params = [], []
+    conditions, params = ["b.status<>'cancelled'"], []
     if start:
         conditions.append("b.ends_at>?")
         params.append(booking_time(start))
@@ -989,7 +997,7 @@ def admin_operations(month: Optional[str] = None, who=Depends(admin_context)):
                 stamp - record["open"]).total_seconds() / 3600
             record["open"] = None
     departments = {}
-    payroll_cost = 0.0
+    payroll_cost = payroll(ym)['total_company_cost']
     for employee in employees:
         key = employee["department_id"]
         group = departments.setdefault(key, {
@@ -1002,8 +1010,6 @@ def admin_operations(month: Optional[str] = None, who=Depends(admin_context)):
         overtime = sum(max(0, hours - daily_hours) for hours in attendance["days"].values())
         group["overtime_hours"] += overtime
         group["overtime_cost"] += overtime * (employee["salary"] / 220) * OVERTIME_RATE
-        gross = employee["salary"] + overtime * (employee["salary"] / 220) * OVERTIME_RATE
-        payroll_cost += gross * (1 + EMPLOYER_CHARGES) + employee["benefits"]
         group["present_employee_days"] += sum(
             1 for eid, _ in present_days if eid == employee["id"])
     task_metrics = {}
@@ -1123,14 +1129,14 @@ def get_company():
 CPF = r"^(\d{11})?$"
 
 class EmployeeIn(BaseModel):
-    name: str; role: str = ""; salary: float = Field(ge=0); benefits: float = Field(default=0, ge=0)
+    name: str; role: str = ""; salary: float = Field(ge=0, allow_inf_nan=False); benefits: float = Field(default=0, ge=0, allow_inf_nan=False)
     cpf: str = Field(default="", pattern=CPF)
     pin: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
     department_id: Optional[int] = None
 
 class EmployeePatch(BaseModel):
     name: Optional[str] = None; role: Optional[str] = None; cpf: Optional[str] = Field(default=None, pattern=CPF)
-    salary: Optional[float] = None; benefits: Optional[float] = None; active: Optional[bool] = None
+    salary: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False); benefits: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False); active: Optional[bool] = None
     department_id: Optional[int] = None
 
 @app.post("/employees", dependencies=[Depends(admin)], status_code=201)
@@ -1287,28 +1293,9 @@ def timesheet(month: Optional[str] = None):
     return {"month": ym, "employees": out}
 
 # ---------- Folha (integrada ao ponto) ----------
-def inss(s): return min(s, 7800) * 0.11          # estimativa; ajuste à tabela vigente
-EMPLOYER_CHARGES = 0.28                           # estimativa de encargos patronais
-
 @app.get("/payroll", dependencies=[Depends(admin)])
 def payroll(month: Optional[str] = None):
-    ym = month or local(utcnow()).strftime("%Y-%m")
-    with db() as c:
-        emps = rows(c.execute("SELECT * FROM employees WHERE active=1"))
-        ts = timesheet_data(c, ym)
-    out = []
-    for e in emps:
-        t = ts.get(e["id"])
-        oh = round(t["overtime"], 2) if t else 0.0
-        ot = round(oh * (e["salary"] / 220) * OVERTIME_RATE, 2)
-        gross = e["salary"] + ot
-        d = inss(gross)
-        out.append({"id": e["id"], "name": e["name"], "role": e["role"], "department_id": e["department_id"], "base_salary": e["salary"],
-                    "overtime_hours": oh, "overtime_pay": ot, "gross": round(gross, 2), "inss": round(d, 2),
-                    "benefits": e["benefits"], "net": round(gross - d + e["benefits"], 2),
-                    "company_cost": round(gross * (1 + EMPLOYER_CHARGES) + e["benefits"], 2)})
-    return {"month": ym, "employees": out, "total_net": round(sum(o["net"] for o in out), 2),
-            "total_company_cost": round(sum(o["company_cost"] for o in out), 2)}
+    return business.payroll_data(sys.modules[__name__], month or local(utcnow()).strftime('%Y-%m'))
 
 # ---------- Produtos / custeio ----------
 class ProductIn(BaseModel):
@@ -1847,7 +1834,9 @@ def delete_task(tid: int):
 class Tx(BaseModel):
     kind: str = Field(pattern="^(receber|pagar)$")
     description: str = Field(min_length=1)
-    amount: float = Field(gt=0)
+    amount: float = Field(gt=0, allow_inf_nan=False)
+    category: Literal["revenue", "cost", "operating", "personnel", "tax", "financial"] = "operating"
+    competence: str = ""
     due: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     department_id: Optional[int] = None
 
@@ -1857,13 +1846,19 @@ def add_tx(t: Tx):
     except ValueError: raise HTTPException(400, "Data de vencimento inválida.")
     if t.department_id is not None and t.kind != "pagar":
         raise HTTPException(400, "Somente despesas podem ser vinculadas a um setor.")
+    if hr.money(t.amount) <= 0:
+        raise HTTPException(400, "Valor deve ser de pelo menos um centavo.")
+    if t.competence:
+        business.month_or_error(t.competence)
+    if t.kind == "pagar" and t.category == "revenue":
+        raise HTTPException(400, "Despesa não pode ser classificada como receita.")
     with db() as c:
         if t.department_id is not None and not c.execute(
             "SELECT 1 FROM departments WHERE id=?", (t.department_id,)
         ).fetchone():
             raise HTTPException(404, "Setor não encontrado.")
-        cur = c.execute("INSERT INTO transactions(kind,description,amount,due,department_id) VALUES(?,?,?,?,?) RETURNING id",
-                        (t.kind, t.description, t.amount, t.due, t.department_id))
+        cur = c.execute("INSERT INTO transactions(kind,description,amount,due,department_id,category,competence) VALUES(?,?,?,?,?,?,?) RETURNING id",
+                        (t.kind, t.description, hr.money(t.amount), t.due, t.department_id, "revenue" if t.kind == "receber" else t.category, t.competence or t.due[:7]))
         transaction_id = cur.fetchall()[0]["id"]
     return {"id": transaction_id}
 
@@ -1893,21 +1888,32 @@ def export_finance():
                     headers={"Content-Disposition": 'attachment; filename="financeiro.csv"'})
 
 @app.patch("/finance/{tid}/paid", dependencies=[Depends(admin)])
-def pay_tx(tid: int):
+def pay_tx(tid: int, who=Depends(admin_context)):
     with db() as c:
-        cur = c.execute("UPDATE transactions SET paid=1, paid_at=? WHERE id=?", (iso(utcnow()), tid))
-        if not cur.rowcount: raise HTTPException(404, "Lançamento não encontrado.")
-    return {"ok": True}
+        c.execute("BEGIN IMMEDIATE")
+        transaction = c.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
+        if not transaction: raise HTTPException(404, "Lançamento não encontrado.")
+        if transaction['paid']: return {"ok": True, "already_paid": True}
+        at = iso(utcnow())
+        c.execute("UPDATE transactions SET paid=1, paid_at=? WHERE id=?", (at, tid))
+        business.record_payment(sys.modules[__name__], c, {**dict(transaction), 'paid_at': at}, who['user'])
+    return {"ok": True, "already_paid": False}
 
 @app.delete("/finance/{tid}", dependencies=[Depends(admin)])
 def delete_tx(tid: int):
-    with db() as c: c.execute("DELETE FROM transactions WHERE id=?", (tid,))
+    with db() as c:
+        transaction = c.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
+        if not transaction: raise HTTPException(404, "Lançamento não encontrado.")
+        if transaction['paid'] or transaction['source_key']:
+            raise HTTPException(409, "Pagamento histórico ou lançamento da folha não pode ser excluído.")
+        c.execute("DELETE FROM transactions WHERE id=?", (tid,))
     return {"ok": True}
 
 @app.get("/finance/summary", dependencies=[Depends(admin)])
 def finance_summary():
     today = local(utcnow()).date()
-    with db() as c: tx = rows(c.execute("SELECT * FROM transactions WHERE paid=0"))
+    with db() as c: all_tx = rows(c.execute("SELECT * FROM transactions"))
+    tx = [t for t in all_tx if not t["paid"]]
     folha = payroll()["total_company_cost"]
     def total(kind, late=False):
         return round(sum(t["amount"] for t in tx if t["kind"] == kind and (not late or t["due"] < today.isoformat())), 2)
@@ -1916,7 +1922,10 @@ def finance_summary():
         ym = d.strftime("%Y-%m")
         pick = lambda k: round(sum(t["amount"] for t in tx if t["kind"] == k and max(t["due"][:7], cur_ym) == ym), 2)
         rec, pag = pick("receber"), pick("pagar")     # vencidos entram no mês atual
-        flow.append({"month": ym, "receber": rec, "pagar": pag, "folha": folha, "saldo": round(rec - pag - folha, 2)})
+        period_cost = payroll(ym)['total_company_cost'] if ym[:4]=='2026' else folha
+        generated_salary = sum(t['amount'] for t in all_tx if t['source_key'].startswith('payroll:') and t['competence']==ym)
+        residual_payroll = round(max(0, period_cost-generated_salary), 2)
+        flow.append({"month": ym, "receber": rec, "pagar": pag, "folha": residual_payroll, "saldo": round(rec - pag - residual_payroll, 2)})
         d = (d + timedelta(days=32)).replace(day=1)
     return {"receber_aberto": total("receber"), "pagar_aberto": total("pagar"),
             "receber_vencido": total("receber", True), "pagar_vencido": total("pagar", True),
@@ -1933,7 +1942,7 @@ def department_costs(month: Optional[str] = None):
         expenses = rows(c.execute("""SELECT department_id,
             SUM(CASE WHEN paid=1 THEN amount ELSE 0 END) AS paid,
             SUM(CASE WHEN paid=0 THEN amount ELSE 0 END) AS open
-            FROM transactions WHERE kind='pagar' AND due>=? AND due<? GROUP BY department_id""", (first_day.isoformat(), next_month)))
+            FROM transactions WHERE kind='pagar' AND source_key NOT LIKE 'payroll:%' AND due>=? AND due<? GROUP BY department_id""", (first_day.isoformat(), next_month)))
     sectors = {d["id"]: {"department_id": d["id"], "name": d["name"], "paid": 0.0,
                           "open": 0.0, "payroll": 0.0} for d in departments}
     for expense in expenses:
@@ -2050,12 +2059,14 @@ SPACE_KINDS = ("gestao", "producao", "pessoas", "financeiro")
 
 class SpaceIn(BaseModel):
     name: str; kind: str = "gestao"; admin_email: str = ""
+    capacity: int = Field(default=1, ge=1, le=1000000)
+    allow_shared: bool = False
 
 @app.post("/spaces", dependencies=[Depends(admin)], status_code=201)
 def add_space(s: SpaceIn):
     if s.kind not in SPACE_KINDS: raise HTTPException(400, "Tipo de espaço inválido.")
     with db() as c:
-        cur = c.execute("INSERT INTO spaces(name,kind,admin_email) VALUES(?,?,?) RETURNING id", (s.name, s.kind, s.admin_email))
+        cur = c.execute("INSERT INTO spaces(name,kind,admin_email,capacity,allow_shared) VALUES(?,?,?,?,?) RETURNING id", (s.name, s.kind, s.admin_email, s.capacity, int(s.allow_shared)))
         space_id = cur.fetchall()[0]["id"]
     return {"id": space_id}
 
@@ -2068,8 +2079,12 @@ def list_spaces():
 def edit_space(sid: int, s: SpaceIn):
     if s.kind not in SPACE_KINDS: raise HTTPException(400, "Tipo de espaço inválido.")
     with db() as c:
-        cur = c.execute("UPDATE spaces SET name=?,kind=?,admin_email=? WHERE id=?",
-                        (s.name, s.kind, s.admin_email, sid))
+        c.execute("BEGIN IMMEDIATE")
+        cur = c.execute("UPDATE spaces SET name=?,kind=?,admin_email=?,capacity=?,allow_shared=? WHERE id=?",
+                        (s.name, s.kind, s.admin_email, s.capacity, int(s.allow_shared), sid))
+        for existing in c.execute("SELECT * FROM space_bookings WHERE space_id=? AND status NOT IN ('cancelled','completed')", (sid,)).fetchall():
+            booking = BookingIn(**{key: existing[key] for key in BookingIn.model_fields})
+            business.check_booking(sys.modules[__name__], c, booking, existing['starts_at'], existing['ends_at'], existing['id'])
         if not cur.rowcount: raise HTTPException(404, "Espaço não encontrado.")
     return {"ok": True}
 
@@ -2079,6 +2094,11 @@ def delete_space(sid: int):
     return {"ok": True}
 
 class BookingIn(BaseModel):
+    status: Literal["tentative", "confirmed", "completed", "cancelled"] = "confirmed"
+    attendees: int = Field(default=1, ge=1, le=1000000)
+    exclusive: bool = True
+    compatibility: str = Field(default="", max_length=80)
+    details: str = Field(default="", max_length=4000)
     space_id: int
     title: str = Field(min_length=1, max_length=160)
     starts_at: str
@@ -2095,7 +2115,7 @@ def booking_time(value):
     return parsed.astimezone(timezone.utc).isoformat(timespec="minutes")
 
 @app.get("/space-bookings", dependencies=[Depends(manager_or_admin)])
-def list_space_bookings(start: Optional[str] = None, end: Optional[str] = None):
+def list_space_bookings(start: Optional[str] = None, end: Optional[str] = None, who=Depends(manager_or_admin)):
     conditions, params = [], []
     if start:
         conditions.append("ends_at>?")
@@ -2110,7 +2130,10 @@ def list_space_bookings(start: Optional[str] = None, end: Optional[str] = None):
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY starts_at,space_name"
     with db() as c:
-        return rows(c.execute(query, params))
+        bookings = rows(c.execute(query, params))
+    for booking in bookings:
+        booking['can_edit'] = who['role']=='admin' or (who['role']=='manager' and booking['booked_by']==who['user'] and booking['department_id']==who['department_id'])
+    return bookings
 
 @app.post("/space-bookings", dependencies=[Depends(principal)], status_code=201)
 def add_space_booking(booking: BookingIn, who=Depends(principal)):
@@ -2134,15 +2157,32 @@ def add_space_booking(booking: BookingIn, who=Depends(principal)):
         if department_id is not None and not c.execute("SELECT 1 FROM departments WHERE id=?",
                                                        (department_id,)).fetchone():
             raise HTTPException(404, "Departamento não encontrado.")
-        overlap = c.execute("SELECT 1 FROM space_bookings WHERE space_id=? "
-                            "AND starts_at<? AND ends_at>? LIMIT 1",
-                            (booking.space_id, end, start)).fetchone()
-        if overlap:
-            raise HTTPException(409, "Este espaço já está reservado nesse horário.")
-        cur = c.execute("INSERT INTO space_bookings(space_id,department_id,title,starts_at,ends_at,booked_by) "
-                        "VALUES(?,?,?,?,?,?) RETURNING id",
-                        (booking.space_id, department_id, title, start, end, who["user"]))
-        return {"id": cur.fetchall()[0]["id"]}
+        business.check_booking(sys.modules[__name__], c, booking, start, end)
+        cur = c.execute("INSERT INTO space_bookings(space_id,department_id,title,starts_at,ends_at,booked_by,status,attendees,exclusive,compatibility,details) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                        (booking.space_id, department_id, title, start, end, who["user"], booking.status, booking.attendees, int(booking.exclusive), booking.compatibility.strip(), booking.details))
+        booking_id = cur.fetchone()['id']
+        business.sync_staff(sys.modules[__name__], c, booking_id)
+        return {"id": booking_id}
+
+@app.patch("/space-bookings/{booking_id}")
+def update_space_booking(booking_id: int, booking: BookingIn, who=Depends(principal)):
+    start, end = booking_time(booking.starts_at), booking_time(booking.ends_at)
+    if not booking.title.strip() or start >= end:
+        raise HTTPException(400, "Informe título e intervalo válido.")
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        old = c.execute("SELECT * FROM space_bookings WHERE id=?", (booking_id,)).fetchone()
+        if not old: raise HTTPException(404, "Agendamento não encontrado.")
+        if who['role'] != 'admin' and (who['role'] not in ('manager','employee') or old['booked_by'] != who['user'] or (who['role']=='manager' and old['department_id'] != who['department_id'])):
+            raise HTTPException(403, "Você só pode editar suas próprias reservas.")
+        department_id = booking.department_id if who['role']=='admin' else who['department_id']
+        if department_id is not None and not c.execute('SELECT 1 FROM departments WHERE id=?', (department_id,)).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
+        business.check_booking(sys.modules[__name__], c, booking, start, end, booking_id)
+        c.execute("UPDATE space_bookings SET space_id=?,department_id=?,title=?,starts_at=?,ends_at=?,status=?,attendees=?,exclusive=?,compatibility=?,details=? WHERE id=?", (booking.space_id, department_id, booking.title.strip(), start, end, booking.status, booking.attendees, int(booking.exclusive), booking.compatibility.strip(), booking.details, booking_id))
+        business.sync_staff(sys.modules[__name__], c, booking_id)
+    return {"ok": True}
 
 @app.delete("/space-bookings/{booking_id}")
 def delete_space_booking(booking_id: int, who=Depends(principal)):
@@ -2158,7 +2198,9 @@ def delete_space_booking(booking_id: int, who=Depends(principal)):
             raise HTTPException(403, "Você só pode cancelar reservas do seu departamento feitas por você.")
         if who["role"] == "employee" and booking["booked_by"] != who["user"]:
             raise HTTPException(403, "Você só pode cancelar suas próprias reservas.")
-        cur = c.execute("DELETE FROM space_bookings WHERE id=?", (booking_id,))
+        c.execute("BEGIN IMMEDIATE")
+        cur = c.execute("UPDATE space_bookings SET status='cancelled' WHERE id=?", (booking_id,))
+        business.sync_staff(sys.modules[__name__], c, booking_id)
         if not cur.rowcount:
             raise HTTPException(404, "Agendamento não encontrado.")
     return {"ok": True}
@@ -2645,8 +2687,11 @@ def dashboard():
                            "detail": f"{overtime:.1f} h extras neste mês (alerta a partir de {DAILY_HOURS} h).",
                            "tab": "ponto"})
     alerts.sort(key=lambda alert: (alert["severity"] != "critico", alert["title"]))
-    gross = sum(e["salary"] for e in emps); ins = sum(inss(e["salary"]) for e in emps)
-    ben = sum(e["benefits"] for e in emps); charges = gross * EMPLOYER_CHARGES
+    canonical_payroll = payroll(month)
+    gross = sum(e['gross'] for e in canonical_payroll['employees'])
+    ins = sum(e['inss'] for e in canonical_payroll['employees'])
+    ben = sum(e['benefits'] for e in canonical_payroll['employees'])
+    charges = sum(e['fgts']+e['employer_charges'] for e in canonical_payroll['employees'])
     return {"present_now": present, "employees_active": len(emps),
             "tasks": [tasks.get(i, 0) for i in range(3)],
             "avg_margin_pct": round(sum(p["margin_pct"] for p in prods) / len(prods), 1) if prods else 0,
@@ -2657,11 +2702,13 @@ def dashboard():
             "overtime_hours": round(overtime_hours, 1),
             "overtime_threshold_hours": DAILY_HOURS, "current_month": month,
             "alerts": alerts, "updated_at": iso(now), "recent": recent,
-            "payroll": {"net": round(gross - ins + ben, 2), "inss": round(ins, 2), "charges": round(charges, 2),
-                        "company_cost": round(gross + charges + ben, 2)},
+            "payroll": {"net": canonical_payroll["total_net"], "inss": round(ins, 2), "charges": round(charges, 2),
+                        "company_cost": canonical_payroll["total_company_cost"]},
             "setup": {"workplace": wp, "employees": bool(emps), "products": bool(prods), "tasks": bool(sum(tasks.values())),
                       "materials": bool(n_mat), "departments": bool(n_dep), "spaces": bool(n_sp)},
             "dre": dre, "lots": lots}
+
+business.register_routes(sys.modules[__name__])
 
 # ---------- Front end (mesmo domínio da API) ----------
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")
