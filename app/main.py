@@ -1940,17 +1940,31 @@ def add_tx(t: Tx):
     return {"id": transaction_id}
 
 @app.get("/finance", dependencies=[Depends(admin)])
-def list_tx(status: str = "open"):
-    q = {"open": "WHERE paid=0", "paid": "WHERE paid=1"}.get(status, "")
+def list_tx(status: Literal['open', 'paid', 'all'] = "open", month: Optional[str] = None,
+            year: Optional[int] = None, kind: Optional[Literal['pagar', 'receber']] = None,
+            q: str = ''):
+    clauses, params = [], []
+    if status != 'all':
+        clauses.append('t.paid=?')
+        params.append(int(status == 'paid'))
+    if month is not None or year is not None:
+        period = business.finance_period(month, year)
+        clauses.append('t.due>=? AND t.due<?')
+        params.extend((period['start'], period['end']))
+    if kind:
+        clauses.append('t.kind=?')
+        params.append(kind)
+    where = 'WHERE ' + ' AND '.join(clauses) if clauses else ''
     with db() as c:
-        return rows(c.execute(f"SELECT t.*,d.name AS department FROM transactions t LEFT JOIN departments d ON d.id=t.department_id {q.replace('paid=', 't.paid=')} ORDER BY t.due,t.id"))
+        items = rows(c.execute(f"SELECT t.*,d.name AS department FROM transactions t LEFT JOIN departments d ON d.id=t.department_id {where} ORDER BY t.due,t.id", params))
+    search = q.strip().casefold()
+    return [t for t in items if not search or search in (t['description'] + ' ' + (t['department'] or '')).casefold()]
 
 @app.get("/finance/export.csv", dependencies=[Depends(admin)])
-def export_finance():
-    with db() as c:
-        transactions = c.execute("""SELECT t.kind,t.description,COALESCE(d.name,'') AS department,t.due,
-            t.amount,t.paid,t.paid_at FROM transactions t
-            LEFT JOIN departments d ON d.id=t.department_id ORDER BY t.due,t.id""").fetchall()
+def export_finance(status: Literal['open', 'paid', 'all'] = 'all', month: Optional[str] = None,
+                   year: Optional[int] = None, kind: Optional[Literal['pagar', 'receber']] = None,
+                   q: str = ''):
+    transactions = list_tx(status, month, year, kind, q)
     out = io.StringIO()
     out.write("\ufeff")
     writer = csv.writer(out, delimiter=";")
@@ -1959,10 +1973,41 @@ def export_finance():
         kind = "A receber" if transaction["kind"] == "receber" else "A pagar"
         status = "Pago" if transaction["paid"] else "Em aberto"
         writer.writerow([csv_safe(value) for value in (
-            kind, transaction["description"], transaction["department"], transaction["due"],
+            kind, transaction["description"], transaction["department"] or '', transaction["due"],
             transaction["amount"], status, transaction["paid_at"] or "")])
     return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="financeiro.csv"'})
+
+class FinanceDeleteSelection(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+def remove_finance_transactions(ids, who):
+    ids = sorted(set(ids))
+    if any(tid <= 0 for tid in ids):
+        raise HTTPException(400, 'Seleção de lançamentos inválida.')
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        selected = rows(c.execute(f"SELECT * FROM transactions WHERE id IN ({','.join('?' for _ in ids)})", ids))
+        if len(selected) != len(ids):
+            raise HTTPException(404, 'Um dos lançamentos não existe mais. Atualize a consulta.')
+        if any(t['paid'] or t['source_key'] for t in selected):
+            raise HTTPException(409, 'A limpeza permite somente contas abertas manuais. Pagamentos históricos e contas da folha são preservados.')
+        for transaction in selected:
+            c.execute('INSERT INTO audit_log(at,actor,role,action,resource,status,ip) VALUES(?,?,?,?,?,?,?)',
+                      (iso(utcnow()), who['user'], who['role'], 'FINANCE_DELETE',
+                       json.dumps({'id': transaction['id'], 'description': transaction['description'],
+                                   'amount': transaction['amount'], 'due': transaction['due'],
+                                   'competence': transaction['competence'], 'kind': transaction['kind'],
+                                   'category': transaction['category'],
+                                   'department_id': transaction['department_id']}, ensure_ascii=False), 200, ''))
+            c.execute('DELETE FROM transactions WHERE id=?', (transaction['id'],))
+    return {'ok': True, 'deleted': len(ids), 'total': hr.money(sum(t['amount'] for t in selected))}
+
+
+@app.post('/finance/delete-selected', dependencies=[Depends(admin)])
+def delete_selected_finance(payload: FinanceDeleteSelection, who=Depends(admin_context)):
+    return remove_finance_transactions(payload.ids, who)
 
 @app.patch("/finance/{tid}/paid", dependencies=[Depends(admin)])
 def pay_tx(tid: int, who=Depends(admin_context)):
@@ -1977,49 +2022,66 @@ def pay_tx(tid: int, who=Depends(admin_context)):
     return {"ok": True, "already_paid": False}
 
 @app.delete("/finance/{tid}", dependencies=[Depends(admin)])
-def delete_tx(tid: int):
-    with db() as c:
-        transaction = c.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
-        if not transaction: raise HTTPException(404, "Lançamento não encontrado.")
-        if transaction['paid'] or transaction['source_key']:
-            raise HTTPException(409, "Pagamento histórico ou lançamento da folha não pode ser excluído.")
-        c.execute("DELETE FROM transactions WHERE id=?", (tid,))
-    return {"ok": True}
+def delete_tx(tid: int, who=Depends(admin_context)):
+    return remove_finance_transactions([tid], who)
 
 @app.get("/finance/summary", dependencies=[Depends(admin)])
-def finance_summary():
+def finance_summary(month: Optional[str] = None, year: Optional[int] = None):
     today = local(utcnow()).date()
+    period = business.finance_period(month, year, today.strftime('%Y-%m'))
+    legacy = month is None and year is None
+    if legacy:
+        current = today.replace(day=1)
+        period['months'] = []
+        for _ in range(6):
+            period['months'].append(current.strftime('%Y-%m'))
+            current = (current + timedelta(days=32)).replace(day=1)
+        period['end'] = current.isoformat()
+        period['mode'] = 'forecast'
     with db() as c: all_tx = rows(c.execute("SELECT * FROM transactions"))
-    tx = [t for t in all_tx if not t["paid"]]
-    folha = payroll()["total_company_cost"]
+    tx = [t for t in all_tx if not t['paid'] and (legacy or period['start'] <= t['due'] < period['end'])]
     def total(kind, late=False):
         return round(sum(t["amount"] for t in tx if t["kind"] == kind and (not late or t["due"] < today.isoformat())), 2)
-    cur_ym, d, flow = today.strftime("%Y-%m"), today.replace(day=1), []
-    for _ in range(6):
-        ym = d.strftime("%Y-%m")
-        pick = lambda k: round(sum(t["amount"] for t in tx if t["kind"] == k and max(t["due"][:7], cur_ym) == ym), 2)
-        rec, pag = pick("receber"), pick("pagar")     # vencidos entram no mês atual
-        period_cost = payroll(ym)['total_company_cost'] if ym[:4]=='2026' else folha
+    flow, payroll_total, unavailable = [], 0, []
+    for ym in period['months']:
+        pick = lambda k: round(sum(t['amount'] for t in tx if t['kind'] == k and
+                                  (max(t['due'][:7], today.strftime('%Y-%m')) if legacy else t['due'][:7]) == ym), 2)
+        rec, pag = pick('receber'), pick('pagar')
+        payroll_data = finance_payroll(ym)
+        period_cost = payroll_data['total_company_cost']
+        payroll_total += period_cost
+        if not payroll_data['available']: unavailable.append(ym)
         generated_salary = sum(t['amount'] for t in all_tx if t['source_key'].startswith('payroll:') and t['competence']==ym)
         residual_payroll = round(max(0, period_cost-generated_salary), 2)
-        flow.append({"month": ym, "receber": rec, "pagar": pag, "folha": residual_payroll, "saldo": round(rec - pag - residual_payroll, 2)})
-        d = (d + timedelta(days=32)).replace(day=1)
+        flow.append({'month': ym, 'receber': rec, 'pagar': pag, 'folha': residual_payroll,
+                     'payroll_available': payroll_data['available'],
+                     'saldo': round(rec - pag - residual_payroll, 2)})
     return {"receber_aberto": total("receber"), "pagar_aberto": total("pagar"),
             "receber_vencido": total("receber", True), "pagar_vencido": total("pagar", True),
-            "folha_mensal": folha, "fluxo": flow}
+            'folha_mensal': finance_payroll(today.strftime('%Y-%m'))['total_company_cost'] if legacy else round(payroll_total, 2),
+            'folha_periodo': round(payroll_total, 2),
+            'saldo_previsto': round(sum(item['saldo'] for item in flow), 2),
+            'payroll_unavailable_months': unavailable, 'period': period, 'fluxo': flow}
 
-def department_costs(month: Optional[str] = None):
-    ym = month or local(utcnow()).strftime("%Y-%m")
-    month_bounds(ym)
-    first_day = date.fromisoformat(ym + "-01")
-    next_month = (first_day + timedelta(days=32)).replace(day=1).isoformat()
-    payroll_data = payroll(ym)
+
+def finance_payroll(month):
+    # Closed snapshots remain valid in any year. An unconfigured tax year must
+    # not block access to historical accounts or reuse another year's salary.
+    try:
+        return {**payroll(month), 'available': True}
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        return {'employees': [], 'total_company_cost': 0, 'available': False}
+
+def department_costs(month: Optional[str] = None, year: Optional[int] = None):
+    period = business.finance_period(month, year, local(utcnow()).strftime('%Y-%m'))
     with db() as c:
         departments = rows(c.execute("SELECT id,name FROM departments ORDER BY name"))
         expenses = rows(c.execute("""SELECT department_id,
             SUM(CASE WHEN paid=1 THEN amount ELSE 0 END) AS paid,
             SUM(CASE WHEN paid=0 THEN amount ELSE 0 END) AS open
-            FROM transactions WHERE kind='pagar' AND source_key NOT LIKE 'payroll:%' AND due>=? AND due<? GROUP BY department_id""", (first_day.isoformat(), next_month)))
+            FROM transactions WHERE kind='pagar' AND source_key NOT LIKE 'payroll:%' AND due>=? AND due<? GROUP BY department_id""", (period['start'], period['end'])))
     sectors = {d["id"]: {"department_id": d["id"], "name": d["name"], "paid": 0.0,
                           "open": 0.0, "payroll": 0.0} for d in departments}
     for expense in expenses:
@@ -2029,12 +2091,16 @@ def department_costs(month: Optional[str] = None):
                             "open": 0.0, "payroll": 0.0}
         sectors[did]["paid"] = round(expense["paid"] or 0, 2)
         sectors[did]["open"] = round(expense["open"] or 0, 2)
-    for employee in payroll_data["employees"]:
-        did = employee["department_id"]
-        if did not in sectors:
-            sectors[did] = {"department_id": None, "name": "Sem setor", "paid": 0.0,
-                            "open": 0.0, "payroll": 0.0}
-        sectors[did]["payroll"] += employee["company_cost"]
+    unavailable = []
+    for ym in period['months']:
+        payroll_data = finance_payroll(ym)
+        if not payroll_data['available']: unavailable.append(ym)
+        for employee in payroll_data['employees']:
+            did = employee['department_id']
+            if did not in sectors:
+                sectors[did] = {'department_id': None, 'name': 'Sem setor', 'paid': 0.0,
+                                'open': 0.0, 'payroll': 0.0}
+            sectors[did]['payroll'] += employee['company_cost']
     items = []
     for sector in sectors.values():
         sector["payroll"] = round(sector["payroll"], 2)
@@ -2042,15 +2108,16 @@ def department_costs(month: Optional[str] = None):
         sector["total"] = round(sector["expenses"] + sector["payroll"], 2)
         items.append(sector)
     items.sort(key=lambda sector: (-sector["total"], sector["name"]))
-    return {"month": ym, "departments": items,
+    return {'month': period['months'][0] if year is None else None, 'period': period,
+            'payroll_unavailable_months': unavailable, 'departments': items,
             "totals": {"paid": round(sum(item["paid"] for item in items), 2),
                        "open": round(sum(item["open"] for item in items), 2),
                        "payroll": round(sum(item["payroll"] for item in items), 2),
                        "total": round(sum(item["total"] for item in items), 2)}}
 
 @app.get("/finance/department-costs", dependencies=[Depends(admin)])
-def get_department_costs(month: Optional[str] = None):
-    return department_costs(month)
+def get_department_costs(month: Optional[str] = None, year: Optional[int] = None):
+    return department_costs(month, year)
 
 # ---------- Matéria-prima ----------
 class MaterialIn(BaseModel):

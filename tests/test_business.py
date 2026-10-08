@@ -26,6 +26,94 @@ def service(tmp_path, monkeypatch):
     return client, {'Authorization':'Bearer '+token}
 
 
+def test_finance_period_filters_summary_accounts_costs_and_csv(service):
+    client, auth = service
+    for due, amount, kind in [('2025-10-10', 90, 'receber'), ('2026-09-10', 100, 'receber'),
+                               ('2026-10-10', 200, 'receber'), ('2026-11-10', 300, 'receber'),
+                               ('2026-10-12', 40, 'pagar'), ('2027-01-10', 500, 'receber')]:
+        assert client.post('/finance', json={'kind': kind, 'description': due, 'amount': amount,
+                                            'due': due}, headers=auth).status_code == 201
+    october = client.get('/finance/summary?month=2026-10', headers=auth).json()
+    assert october['receber_aberto'] == 200 and october['pagar_aberto'] == 40
+    assert [(r['month'], r['saldo']) for r in october['fluxo']] == [('2026-10', 160)]
+    year = client.get('/finance/summary?year=2026', headers=auth).json()
+    assert year['receber_aberto'] == 600 and year['pagar_aberto'] == 40
+    assert len(year['fluxo']) == 12 and year['saldo_previsto'] == 560
+    assert len(client.get('/finance?year=2026', headers=auth).json()) == 4
+    assert client.get('/finance/department-costs?year=2026', headers=auth).json()['totals']['open'] == 40
+    export = client.get('/finance/export.csv?month=2026-10&kind=receber&q=2026-10', headers=auth).text
+    assert '2026-10-10' in export and '2026-09-10' not in export and '2026-10-12' not in export
+    assert len(client.get('/finance?year=2026&kind=pagar&status=all', headers=auth).json()) == 1
+    for path in ['/finance', '/finance/summary', '/finance/department-costs', '/finance/payments', '/finance/export.csv']:
+        assert client.get(path + '?month=2026-10&year=2026', headers=auth).status_code == 400
+        assert client.get(path + '?month=2026-13', headers=auth).status_code == 400
+        assert client.get(path + '?year=10000', headers=auth).status_code == 400
+
+
+def test_historical_finance_year_without_tax_rules_keeps_accounts_available(service):
+    client, auth = service
+    employee(service)
+    client.post('/finance', json={'kind': 'receber', 'description': 'Venda histórica',
+                                  'amount': 800, 'due': '2025-08-10'}, headers=auth)
+    response = client.get('/finance/summary?year=2025', headers=auth)
+    assert response.status_code == 200
+    report = response.json()
+    assert report['receber_aberto'] == 800 and report['saldo_previsto'] == 800
+    assert report['payroll_unavailable_months'] == [f'2025-{n:02d}' for n in range(1, 13)]
+    assert client.get('/finance/department-costs?year=2025', headers=auth).status_code == 200
+
+
+def test_finance_delete_selection_is_atomic_audited_and_recalculates(service):
+    client, auth = service
+    def add(description, amount):
+        return client.post('/finance', json={'kind': 'receber', 'description': description,
+                                             'amount': amount, 'due': '2026-10-10'}, headers=auth).json()['id']
+    first, second, paid = add('Excluir A', 100), add('Excluir B', 200), add('Preservar quitado', 500)
+    client.patch(f'/finance/{paid}/paid', headers=auth)
+    before = client.get('/finance/payments', headers=auth).json()
+    assert client.post('/finance/delete-selected', json={'ids': [first, paid]}, headers=auth).status_code == 409
+    assert client.post('/finance/delete-selected', json={'ids': [first, 99999]}, headers=auth).status_code == 404
+    assert client.get('/finance/summary?month=2026-10', headers=auth).json()['receber_aberto'] == 300
+    result = client.post('/finance/delete-selected', json={'ids': [first, second, first]}, headers=auth)
+    assert result.status_code == 200 and result.json()['deleted'] == 2 and result.json()['total'] == 300
+    assert client.get('/finance/summary?month=2026-10', headers=auth).json()['receber_aberto'] == 0
+    assert client.get('/finance/dre?start=2026-10&end=2026-10', headers=auth).json()['revenue'] == 500
+    assert client.get('/finance/payments', headers=auth).json() == before
+    with main.db() as c:
+        logs = c.execute("SELECT resource FROM audit_log WHERE action='FINANCE_DELETE'").fetchall()
+        assert {json.loads(r['resource'])['id'] for r in logs} == {first, second}
+    assert client.post('/finance/delete-selected', json={'ids': []}, headers=auth).status_code == 422
+    assert client.post('/finance/delete-selected', json={'ids': [-1]}, headers=auth).status_code == 400
+
+
+def test_finance_selection_preserves_payroll_and_year_forecast_avoids_duplication(service):
+    client, auth = service
+    employee(service)
+    client.post('/payroll/close', json={'month': '2026-10'}, headers=auth)
+    transaction = client.get('/finance?month=2026-10', headers=auth).json()[0]
+    assert client.post('/finance/delete-selected', json={'ids': [transaction['id']]}, headers=auth).status_code == 409
+    summary = client.get('/finance/summary?month=2026-10', headers=auth).json()
+    assert summary['fluxo'][0]['pagar'] + summary['fluxo'][0]['folha'] == summary['folha_periodo']
+    annual = client.get('/finance/summary?year=2026', headers=auth).json()
+    monthly = [client.get(f'/finance/summary?month=2026-{n:02d}', headers=auth).json()['folha_periodo'] for n in range(1, 13)]
+    assert annual['folha_periodo'] == round(sum(monthly), 2)
+
+
+def test_payment_period_filter_uses_company_timezone_and_year(service, monkeypatch):
+    from datetime import datetime, timezone
+    client, auth = service
+    for stamp, description in [('2026-10-01T02:30:00+00:00', 'Pago em setembro local'),
+                                ('2027-01-01T02:30:00+00:00', 'Pago em dezembro local')]:
+        tid = client.post('/finance', json={'kind': 'pagar', 'description': description,
+                                            'amount': 100, 'due': '2026-09-30'}, headers=auth).json()['id']
+        monkeypatch.setattr(main, 'utcnow', lambda value=stamp: datetime.fromisoformat(value))
+        client.patch(f'/finance/{tid}/paid', headers=auth)
+    assert len(client.get('/finance/payments?year=2026', headers=auth).json()) == 2
+    assert client.get('/finance/payments?month=2026-10', headers=auth).json() == []
+    assert len(client.get('/finance/payments?month=2026-09', headers=auth).json()) == 1
+    assert len(client.get('/finance/payments?month=2026-12', headers=auth).json()) == 1
+
+
 def employee(service, salary=6000, hired='2026-01-01'):
     client, auth = service
     eid = client.post('/employees', json={'name':'Colaborador','salary':salary,'pin':'1234'}, headers=auth).json()['id']

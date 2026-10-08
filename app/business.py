@@ -79,6 +79,25 @@ def month_or_error(month):
     return month
 
 
+def finance_period(month=None, year=None, default_month=None):
+    if month is not None and year is not None:
+        raise HTTPException(400, 'Escolha mês ou ano, não os dois.')
+    if year is not None:
+        if not 1900 <= year <= 9998:
+            raise HTTPException(400, 'Ano inválido.')
+        months = [f'{year:04d}-{number:02d}' for number in range(1, 13)]
+    else:
+        months = [month_or_error(month if month is not None else default_month)]
+    start = months[0] + '-01'
+    try:
+        last = date.fromisoformat(months[-1] + '-01')
+        end = date(last.year + (last.month == 12), last.month % 12 + 1, 1).isoformat()
+    except ValueError:
+        raise HTTPException(400, 'Período financeiro inválido.')
+    return {'start': start, 'end': end, 'months': months,
+            'mode': 'year' if year is not None else 'month'}
+
+
 def profile_for(c, employee_id):
     row = c.execute('SELECT * FROM employee_payroll_profiles WHERE employee_id=?', (employee_id,)).fetchone()
     return {**hr.PROFILE_DEFAULTS, **(dict(row) if row else {})}
@@ -310,12 +329,16 @@ def register_routes(m):
         return {'id': record_id, **quote}
 
     @app.get('/finance/payments', dependencies=[Depends(m.admin)])
-    def payments(month: str | None = None):
+    def payments(month: str | None = None, year: int | None = None):
         query, params = 'SELECT * FROM payment_history', []
-        if month:
-            month_or_error(month)
-            query += ' WHERE substr(paid_at,1,7)=?'
-            params.append(month)
+        if month is not None or year is not None:
+            period = finance_period(month, year)
+            # Match the local payment date used by the UI, including UTC dates
+            # that cross midnight in the company's timezone.
+            start = m.day_range(date.fromisoformat(period['start']))[0]
+            end = m.day_range(date.fromisoformat(period['end']))[0]
+            query += ' WHERE paid_at>=? AND paid_at<?'
+            params.extend((start, end))
         query += ' ORDER BY paid_at DESC,id DESC'
         with m.db() as c:
             items = m.rows(c.execute(query, params))
