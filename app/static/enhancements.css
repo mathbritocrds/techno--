@@ -80,3 +80,7 @@ main.leave{animation-duration:.15s}.view,.fi,.play,.app nav{animation-duration:v
 #root>.out{animation-duration:.18s}
 .animate .rise,.animate tr,.animate .dash-track i,.animate .cost-row,.animate .cost-track i{animation-duration:.22s;animation-delay:0s}
 .overview-kpis .d,.payroll-kpis .d{margin-left:0}
+.task-stage-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 16px;margin:12px 0 16px;font-size:12px;color:var(--mute)}
+.task-stage-legend span{display:flex;align-items:center;gap:6px}.task-stage-legend b{font-weight:500;color:var(--ink)}
+.task-stage-legend span::before{content:'';width:7px;height:7px;flex-shrink:0;border-radius:50%;background:var(--o)}
+.task-stage-legend span:nth-child(2)::before{background:var(--b)}.task-stage-legend span:nth-child(3)::before{background:var(--g)}
