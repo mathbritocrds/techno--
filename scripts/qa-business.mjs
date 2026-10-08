@@ -78,6 +78,29 @@ try {
           page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Fechar folha e gerar contas a pagar'}).click();await page.getByRole('button',{name:'Folha fechada',exact:true}).waitFor();
         }
         await navigate('finance','financeiro');await page.getByRole('heading',{name:'DRE integrada · regime de competência'}).waitFor();
+        assert.equal(await page.locator('[data-flow-month]').count(),1);
+        await page.getByLabel('Mês da consulta financeira',{exact:true}).fill('2026-09');
+        await page.locator('[data-flow-month="2026-09"]').waitFor();assert.equal(await page.locator('[data-flow-month="2026-10"]').count(),0);
+        assert.equal(await page.getByLabel('Início da DRE',{exact:true}).inputValue(),'2026-09');
+        assert.equal(await page.locator('[data-finance-accounts]').getByRole('cell',{name:'Venda QA',exact:true}).count(),0);
+        await page.getByRole('combobox',{name:'Tipo de consulta financeira',exact:true}).selectOption('year');
+        await page.getByRole('heading',{name:'Fluxo de caixa previsto · 2026',exact:true}).waitFor();assert.equal(await page.locator('[data-flow-month]').count(),12);
+        assert.equal(await page.getByLabel('Início da DRE',{exact:true}).inputValue(),'2026-01');assert.equal(await page.getByLabel('Fim da DRE',{exact:true}).inputValue(),'2026-12');
+        await page.getByLabel('Início da DRE',{exact:true}).fill('2026-09');await page.getByRole('heading',{name:'Fluxo de caixa previsto · 2026',exact:true}).waitFor();assert.equal(await page.getByLabel('Fim da DRE',{exact:true}).inputValue(),'2026-12');
+        await page.screenshot({path:`${output}/sigi-${name}-financeiro-anual-${viewport}.png`,fullPage:true,animations:'disabled'});
+        await page.getByRole('combobox',{name:'Ano da consulta financeira',exact:true}).selectOption('2025');await page.getByRole('heading',{name:'Fluxo de caixa previsto · 2025',exact:true}).waitFor();
+        assert.equal(await page.locator('[data-finance-accounts] tbody tr').count(),0);
+        await page.getByRole('button',{name:'Limpar filtros',exact:true}).click();await page.locator('[data-flow-month="2026-10"]').waitFor();assert.equal(await page.locator('[data-flow-month]').count(),1);
+        await page.locator('#fd').fill('Limpeza QA '+viewport);await page.locator('#fv').fill('444');await page.locator('#ft').fill('2026-10-20');await page.getByRole('button',{name:'Adicionar lançamento',exact:true}).click();
+        await page.getByRole('checkbox',{name:'Selecionar Limpeza QA '+viewport,exact:true}).waitFor();await page.getByRole('checkbox',{name:'Selecionar Limpeza QA '+viewport,exact:true}).check();
+        page.once('dialog',dialog=>dialog.dismiss());await page.locator('#deleteFinanceSelected').click();assert.equal(await page.getByRole('checkbox',{name:'Selecionar Limpeza QA '+viewport,exact:true}).count(),1);
+        page.once('dialog',dialog=>dialog.accept());await page.locator('#deleteFinanceSelected').click();await page.getByRole('checkbox',{name:'Selecionar Limpeza QA '+viewport,exact:true}).waitFor({state:'detached'});await page.locator('[data-flow-month="2026-10"]').waitFor();
+        assert.equal(await page.getByRole('checkbox',{name:'Selecionar Limpeza QA '+viewport,exact:true}).count(),0);await page.waitForFunction(()=>S.dreData?.revenue===15000);
+        assert((await page.locator('[data-flow-month="2026-10"] td').nth(1).textContent()).includes('15.000,00'));
+        await page.getByLabel('Buscar lançamento financeiro',{exact:true}).fill('Venda QA');await page.getByRole('button',{name:'Buscar contas',exact:true}).click();await page.locator('[data-finance-accounts]').getByRole('cell',{name:'Venda QA',exact:true}).waitFor();
+        assert.equal(await page.locator('[data-finance-accounts] tbody tr').count(),1);
+        const accountDownloadWait=page.waitForEvent('download');await page.getByRole('button',{name:'Exportar CSV',exact:true}).click();const accountDownload=await accountDownloadWait;assert.equal(accountDownload.suggestedFilename(),'financeiro.csv');
+        await page.getByRole('button',{name:'Limpar filtros',exact:true}).click();await page.locator('[data-flow-month="2026-10"]').waitFor();
         await page.locator('#fk').selectOption('pagar');await page.locator('#fd').fill('Conta criada '+viewport);await page.locator('#fv').fill('200');await page.locator('#ft').fill('2026-10-15');await page.locator('#fdep').selectOption(String(department.id));await page.locator('#fcategory').selectOption('financial');await page.getByRole('button',{name:'Adicionar lançamento',exact:true}).click();await page.getByRole('cell',{name:'Conta criada '+viewport,exact:true}).waitFor();
         if(await page.getByRole('button',{name:'Marcar como pago',exact:true}).count()) await page.getByRole('button',{name:'Marcar como pago',exact:true}).first().click();await page.locator('input[aria-label^="Anexar comprovante"]').first().waitFor();
         await page.locator('input[aria-label^="Anexar comprovante"]').first().setInputFiles({name:'comprovante.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.7\nQA receipt')});await page.getByRole('button',{name:'comprovante.pdf',exact:true}).last().waitFor();
@@ -86,7 +109,7 @@ try {
         await page.getByRole('cell',{name:'Custos operacionais',exact:true}).first().waitFor();
         const downloadWait=page.waitForEvent('download');await page.getByRole('button',{name:'Exportar DRE CSV / Excel',exact:true}).click();const download=await downloadWait;assert(download.suggestedFilename().startsWith('dre-'));
         await page.getByRole('combobox',{name:'Ordenar DRE',exact:true}).selectOption('expense');await page.getByRole('heading',{name:'Detalhamento por mês, setor e categoria'}).waitFor();
-        await page.screenshot({path:`${output}/sigi-${name}-financeiro-${viewport}.png`,fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Horizontal overflow on finance');
+        await page.screenshot({path:`${output}/sigi-${name}-financeiro-${viewport}.png`,fullPage:true,animations:'disabled'});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Horizontal overflow on finance');
         await navigate('tasks','espacos');await page.getByRole('heading',{name:'Espaços e agenda'}).waitFor();
         await page.locator('#sn').fill('Espaço '+viewport);await page.locator('#spaceCapacity').fill('20');await page.locator('#spaceShared').selectOption('1');await page.getByRole('button',{name:'Adicionar recurso',exact:true}).click();await page.locator(`input[data-sn][value="Espaço ${viewport}"]`).waitFor();await page.getByRole('button',{name:'Equipe automática',exact:true}).last().waitFor();
         await page.getByRole('button',{name:'Equipe automática',exact:true}).last().click();await page.locator('#staffEmployee').selectOption(String(employee.id));await page.locator('#staffBefore').fill('30');await page.getByRole('button',{name:'Vincular funcionário',exact:true}).click();await page.getByRole('button',{name:'Remover',exact:true}).waitFor();await page.locator('#taskDialogContent').getByRole('button',{name:'Fechar',exact:true}).click();
@@ -97,7 +120,7 @@ try {
         await navigate('security','seguranca');await page.getByRole('combobox',{name:'Funcionário cadastrado',exact:true}).waitFor();
         await navigate('rh','departamentos');await page.getByRole('combobox',{name:'Chefe cadastrado',exact:true}).first().waitFor();
         assert.deepEqual(errors,[]);
-        verdict.push({build:name,viewport,ok:true,flows:['task-gauge','unified-login','username-session','mobile-menu','visual-employees','monthly-annual-totals','bonuses','employee-create-edit','navigation','onboarding','dashboard-charts','payroll','benefits','close','payment','receipt','dre-import','dre-export','manager-dre','employee-gps','space','staff','event','edit']});
+        verdict.push({build:name,viewport,ok:true,flows:['finance-periods','finance-delete-selection','filtered-finance-export','task-gauge','unified-login','username-session','mobile-menu','visual-employees','monthly-annual-totals','bonuses','employee-create-edit','navigation','onboarding','dashboard-charts','payroll','benefits','close','payment','receipt','dre-import','dre-export','manager-dre','employee-gps','space','staff','event','edit']});
         await context.close();
         // Department managers can use DRE without loading admin-only endpoints.
         const managerContext=await browser.newContext({viewport:{width,height},reducedMotion:'reduce'}),managerPage=await managerContext.newPage();

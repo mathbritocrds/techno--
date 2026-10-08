@@ -74,18 +74,20 @@ async function recordVacation(id) {
 const originalFinanceView = TAB.financeiro;
 const financialCategories = {cost:'Custos operacionais',operating:'Despesas operacionais',personnel:'Pessoal avulso',tax:'Impostos / deduções da receita',financial:'Despesas financeiras'};
 TAB.financeiro = async function () {
-  const month=S.financeMonth||new Date().toISOString().slice(0,7);S.financeMonth=month;
-  let html=ROLE==='admin'?(await originalFinanceView()).replace('<h1>Financeiro</h1>','<h1>Contas e DRE</h1>'):'<h1>Financeiro do departamento</h1><p class="sub">DRE de competência e importações restritas ao seu setor.</p>';
-  if(ROLE==='admin') html=html.replace('<input id="fd"', `<select id="fcategory" aria-label="Classificação DRE">${Object.entries(financialCategories).map(([k,v])=>`<option value="${k}" ${k==='operating'?'selected':''}>${v}</option>`).join('')}</select><input id="fcompetence" type="month" aria-label="Competência contábil" value="${month}"><input id="fd"`);
-  html+=await dreView();
+  const period=financePeriod(),request=S.financeRequest=(S.financeRequest||0)+1;
+  S.financeMonth=period.month;S.financeSelection=[];
+  const [base,dre,payments]=await Promise.all([ROLE==='admin'?originalFinanceView(period,request):Promise.resolve(`<h1>Financeiro do departamento</h1><p class="sub">DRE de competência e importações restritas ao seu setor.</p>${financeToolbar(period)}`),dreView(dreParams(),request),ROLE==='admin'?api('/finance/payments?'+period.params):Promise.resolve([])]);
+  let html=base.replace('<h1>Financeiro</h1>','<h1>Contas e DRE</h1>');
+  if(ROLE==='admin') html=html.replace('<input id="fd"', `<select id="fcategory" aria-label="Classificação DRE">${Object.entries(financialCategories).map(([k,v])=>`<option value="${k}" ${k==='operating'?'selected':''}>${v}</option>`).join('')}</select><input id="fcompetence" type="month" aria-label="Competência contábil" value="${period.month}"><input id="fd"`);
+  html+=dre;
   if(ROLE!=='admin')return html;
-  const payments=await api('/finance/payments?month='+month);
-  return html+`<section class="card tw" style="margin-top:12px"><h3>Histórico de pagamentos e recebimentos · ${month}</h3><p class="sub">Comprovantes PDF, PNG ou JPG, até 6 MB.</p>${payments.length?`<table><tr><th>Descrição</th><th>Valor</th><th>Pago em / autor</th><th>Comprovantes</th></tr>${payments.map(p=>`<tr><td>${esc(p.description)}</td><td>${R(p.amount)}</td><td>${new Date(p.paid_at).toLocaleString('pt-BR')}<br>${esc(p.actor)}</td><td>${p.attachments.map(a=>`<button class="chip" onclick="run(()=>downloadPaymentFile(${p.id},${a.id}),this)">${esc(a.name)}</button>`).join('')}<label class="chip">Anexar<input type="file" accept="application/pdf,image/png,image/jpeg" aria-label="Anexar comprovante ${esc(p.description)}" onchange="run(()=>uploadPaymentFile(${p.id},this))"></label></td></tr>`).join('')}</table>`:'<p class="sub">Nenhum pagamento registrado neste mês.</p>'}</section>`;
+  return html+`<section class="card tw" style="margin-top:12px" data-finance-history><h3>Histórico de pagamentos e recebimentos · ${period.label}</h3><p class="sub">Comprovantes PDF, PNG ou JPG, até 6 MB.</p>${payments.length?`<table><tr><th>Descrição</th><th>Valor</th><th>Pago em / autor</th><th>Comprovantes</th></tr>${payments.map(p=>`<tr><td>${esc(p.description)}</td><td>${R(p.amount)}</td><td>${new Date(p.paid_at).toLocaleString('pt-BR')}<br>${esc(p.actor)}</td><td>${p.attachments.map(a=>`<button class="chip" onclick="run(()=>downloadPaymentFile(${p.id},${a.id}),this)">${esc(a.name)}</button>`).join('')}<label class="chip">Anexar<input type="file" accept="application/pdf,image/png,image/jpeg" aria-label="Anexar comprovante ${esc(p.description)}" onchange="run(()=>uploadPaymentFile(${p.id},this))"></label></td></tr>`).join('')}</table>`:'<p class="sub">Nenhum pagamento registrado neste período.</p>'}</section>`;
 };
 addTx = async function () {
   const kind = $('#fk').value;
+  if(!$('#fd').value.trim()||!Number.isFinite(+$('#fv').value)||+$('#fv').value<=0||!$('#ft').value||!$('#fcompetence').value)throw new Error('Preencha descrição, valor positivo, vencimento e competência.');
   await api('/finance','POST',{kind,description:$('#fd').value.trim(),amount:+$('#fv').value,due:$('#ft').value,department_id:kind==='pagar'?(+$('#fdep').value||null):null,category:kind==='receber'?'revenue':$('#fcategory').value,competence:$('#fcompetence').value});
-  await refresh();
+  toast('Lançamento salvo. A consulta segue o período selecionado.','ok');await reloadFinance();
 };
 async function uploadPaymentFile(id, input) {
   const file = input.files?.[0]; if (!file) return;
