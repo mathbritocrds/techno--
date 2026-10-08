@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS employee_payroll_profiles(
  va_amount REAL NOT NULL DEFAULT 0, va_discount REAL NOT NULL DEFAULT 0,
  fgts_rate REAL NOT NULL DEFAULT 0.08, employer_rate REAL NOT NULL DEFAULT 0.20,
  vacation_days INTEGER NOT NULL DEFAULT 30, variable_average REAL NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS employee_bonuses(
+ employee_id INTEGER NOT NULL REFERENCES employees(id), month TEXT NOT NULL,
+ amount REAL NOT NULL DEFAULT 0 CHECK(amount>=0), note TEXT NOT NULL DEFAULT '',
+ updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(employee_id,month));
 CREATE TABLE IF NOT EXISTS payroll_runs(
  id INTEGER PRIMARY KEY, month TEXT NOT NULL UNIQUE, closed_at TEXT NOT NULL,
  closed_by TEXT NOT NULL, rules_version TEXT NOT NULL);

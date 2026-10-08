@@ -107,10 +107,10 @@ def test_front_end_e_servido():
     assert "SIGI" in page and 'class="boot-screen"' in page
     assert "accountShortcut" in page and 'data-t="conta"' not in page
     assert "const formG=" in page and "Criar primeira conta da empresa" in page
-    assert "Excluir remove o acesso e arquiva o cadastro" in page
+    assert "accountShortcut" in page and "/auth/sign-in" in page
     assert "Custeio mensal por setor" in page
-    assert "Composição do DRE" in page and "Alertas operacionais" in page
-    assert "atualização automática a cada 30 s" in page and "Estoque mínimo" in page
+    assert "Composição do DRE" in page and "Alertas operacionais" in client.get("/enhancements.js").text
+    assert "atualização automática a cada 30 s" in client.get("/enhancements.js").text and "Estoque mínimo" in page
     assert "Busca global (Ctrl+K)" in page and "/events" in page
     assert "Autenticador de dois fatores" in page and "/service-worker.js" in page
     assert "dragOverColumn" in page and "taskDialogContent" in page

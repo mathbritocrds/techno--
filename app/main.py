@@ -328,7 +328,7 @@ async def audit_mutations(request, call_next):
     response = (JSONResponse({"detail": "Sua função não tem permissão para esta ação."}, status_code=403)
                 if denied else await call_next(request))
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {
-        "/auth/login", "/auth/employee/login", "/auth/register", "/auth/logout",
+        "/auth/login", "/auth/employee/login", "/auth/sign-in", "/auth/register", "/auth/logout",
     }:
         with db() as c:
             c.execute(
@@ -461,6 +461,8 @@ def register_account(b: Registration, authorization: str = Header(default="")):
             raise HTTPException(401, "Entre como administrador para criar outro acesso.")
         if c.execute('SELECT 1 FROM admins WHERE "user"=?', (email,)).fetchone():
             raise HTTPException(409, "Este e-mail já possui acesso.")
+        if c.execute('SELECT 1 FROM employees WHERE lower(account_email)=lower(?)', (email,)).fetchone():
+            raise HTTPException(409, "Este e-mail já pertence a uma conta de funcionário.")
         if c.execute('SELECT 1 FROM admins WHERE lower(username)=lower(?) AND username!=\'\'',
                      (username,)).fetchone():
             raise HTTPException(409, "Este nome de usuário já está em uso.")
@@ -517,7 +519,7 @@ def login(b: Login):
         tok = secrets.token_urlsafe(32)
         c.execute("DELETE FROM sessions WHERE expires<?", (now,))
         c.execute('INSERT INTO sessions(token,"user",expires,role) VALUES(?,?,?,?)',
-                  (hashlib.sha256(tok.encode()).hexdigest(), k, now + SESSION_HOURS * 3600, a["role"]))
+                  (hashlib.sha256(tok.encode()).hexdigest(), a["user"], now + SESSION_HOURS * 3600, a["role"]))
     return {"token": tok, "user": a["user"], "name": account_username(a["user"], a["username"]),
             "role": a["role"]}
 
@@ -545,7 +547,7 @@ def update_account(b: AccountUpdate, who=Depends(principal)):
             '(lower("user")=lower(?) OR (username!=\'\' AND lower(username)=lower(?)))',
             (old_email, email, username),
         ).fetchone()
-        if conflict:
+        if conflict or c.execute('SELECT 1 FROM employees WHERE lower(account_email)=lower(?)', (email,)).fetchone():
             raise HTTPException(409, "Este e-mail ou nome de usuário já está em uso.")
         salt = account["salt"]
         password_hash = account["hash"]
@@ -576,6 +578,25 @@ def employee_login(b: Login):
         c.execute('INSERT INTO sessions(token,"user",expires,role,subject_id) VALUES(?,?,?,\'employee\',?)',
                   (hashlib.sha256(token.encode()).hexdigest(), email, now + SESSION_HOURS * 3600, e["id"]))
     return {"token": token, "user": email, "role": "employee", "employee_id": e["id"], "name": e["name"]}
+
+@app.post("/auth/sign-in")
+def sign_in(b: Login):
+    identity = (b.email or b.user).strip().lower()
+    # Resolve the account once; never retry a failed password against another role.
+    with db() as c:
+        account = c.execute('SELECT 1 FROM admins WHERE lower("user")=lower(?)', (identity,)).fetchone()
+        worker = c.execute('SELECT 1 FROM employees WHERE lower(account_email)=lower(?) AND active=1', (identity,)).fetchone()
+    if not account and worker:
+        return employee_login(b)
+    return login(b)
+
+
+@app.get("/auth/branding")
+def auth_branding():
+    with db() as c:
+        company = settings(c)
+    return {"name": company.get('co_name', '')}
+
 
 class EmployeeRequestIn(BaseModel):
     kind: Literal["ferias", "folga", "atestado"]
@@ -717,8 +738,8 @@ def employee_payroll(month: Optional[str] = None, who=Depends(employee_principal
     item = next((e for e in data['employees'] if e['id'] == who['employee_id']), None)
     if item is None:
         raise HTTPException(404, "Sem folha para a competência.")
-    allowed = ('name','role','base_salary','overtime_hours','overtime_pay','gross','inss','irrf','benefits','net','vt_amount','vt_discount','va_amount','va_discount','fgts','fgts_accumulated','thirteenth_proportional','vacation_total')
-    return {"month": ym, "closed": data['closed'], **{k: item[k] for k in allowed}}
+    allowed = ('name','role','base_salary','bonus_amount','overtime_hours','overtime_pay','gross','inss','irrf','benefits','net','vt_amount','vt_discount','va_amount','va_discount','fgts','fgts_accumulated','thirteenth_proportional','vacation_total')
+    return {"month": ym, "closed": data['closed'], **{k: item.get(k, 0) for k in allowed}}
 
 @app.get("/employee/tasks")
 def employee_tasks(who=Depends(employee_principal)):
@@ -742,7 +763,7 @@ def employee_spaces(start: Optional[str] = None, end: Optional[str] = None,
     if end:
         conditions.append("b.starts_at<?")
         params.append(booking_time(end))
-    query = ("SELECT b.id,b.space_id,b.title,b.starts_at,b.ends_at,b.booked_by,s.name AS space_name "
+    query = ("SELECT b.id,b.space_id,b.department_id,b.title,b.starts_at,b.ends_at,b.booked_by,b.status,b.attendees,b.exclusive,b.compatibility,b.details,s.name AS space_name "
              "FROM space_bookings b JOIN spaces s ON s.id=b.space_id")
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -750,6 +771,8 @@ def employee_spaces(start: Optional[str] = None, end: Optional[str] = None,
     with db() as c:
         spaces = rows(c.execute("SELECT id,name,kind FROM spaces ORDER BY name"))
         bookings = rows(c.execute(query, params))
+    for booking in bookings:
+        booking['can_edit'] = booking['booked_by'] == who['user']
     return {"spaces": spaces, "bookings": bookings}
 
 @app.get("/employee/requests/{request_id}/attachment")
@@ -1162,6 +1185,9 @@ class EmployeeIn(BaseModel):
     cpf: str = Field(default="", pattern=CPF)
     pin: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
     department_id: Optional[int] = None
+    hired_on: Optional[date] = None
+    account_email: str = Field(default='', max_length=254, pattern=r'^([^@\s]+@[^@\s]+\.[^@\s]+)?$')
+    account_password: str = Field(default='', max_length=128)
 
 class EmployeePatch(BaseModel):
     name: Optional[str] = None; role: Optional[str] = None; cpf: Optional[str] = Field(default=None, pattern=CPF)
@@ -1170,11 +1196,24 @@ class EmployeePatch(BaseModel):
 
 @app.post("/employees", dependencies=[Depends(admin)], status_code=201)
 def add_employee(e: EmployeeIn):
+    name, email = e.name.strip(), e.account_email.strip().lower()
+    if not name:
+        raise HTTPException(422, "Informe o nome do funcionário.")
+    if bool(email) != bool(e.account_password) or (email and len(e.account_password) < 8):
+        raise HTTPException(422, "Preencha e-mail e senha de pelo menos 8 caracteres para criar o acesso.")
     salt = secrets.token_hex(16)
     with db() as c:
-        cur = c.execute("INSERT INTO employees(name,cpf,role,salary,benefits,pin_salt,pin_hash,department_id) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
-                        (e.name, e.cpf, e.role, e.salary, e.benefits, salt, hash_pin(e.pin, salt), e.department_id))
-        employee_id = cur.fetchall()[0]["id"]
+        c.execute("BEGIN IMMEDIATE")
+        if e.department_id is not None and not c.execute('SELECT 1 FROM departments WHERE id=?', (e.department_id,)).fetchone():
+            raise HTTPException(404, "Departamento não encontrado.")
+        if email and (c.execute('SELECT 1 FROM admins WHERE lower("user")=lower(?)', (email,)).fetchone() or c.execute('SELECT 1 FROM employees WHERE lower(account_email)=lower(?)', (email,)).fetchone()):
+            raise HTTPException(409, "Este e-mail já possui uma conta no sistema.")
+        account_salt = secrets.token_hex(16) if email else None
+        cur = c.execute("INSERT INTO employees(name,cpf,role,salary,benefits,pin_salt,pin_hash,department_id,account_email,account_salt,account_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                        (name, e.cpf, e.role, e.salary, e.benefits, salt, hash_pin(e.pin, salt), e.department_id, email, account_salt, hash_pin(e.account_password,account_salt) if email else None))
+        employee_id = cur.fetchone()["id"]
+        if e.hired_on:
+            c.execute('INSERT INTO employee_payroll_profiles(employee_id,hired_on) VALUES(?,?)', (employee_id,e.hired_on.isoformat()))
     return {"id": employee_id}
 
 @app.get("/employees", dependencies=[Depends(admin)])
