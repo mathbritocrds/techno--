@@ -30,7 +30,7 @@ try {
       const profile=await fetch(base+`/employees/${employee.id}/payroll-profile`,{method:'PUT',headers,body:JSON.stringify({hired_on:'2024-01-01'})});assert(profile.ok);
       const incomplete=await (await fetch(base+'/dashboard',{headers})).json();assert.equal(incomplete.setup_completed,false);
       await fetch(base+'/settings/workplace',{method:'PUT',headers,body:JSON.stringify({lat:-23.55,lng:-46.63,radius_m:100})});
-      await post('/products',{name:'Produto QA'});await post('/materials',{name:'Material QA'});await post('/tasks',{title:'Primeira tarefa QA'});await post('/spaces',{name:'Espaço inicial'});
+      await post('/products',{name:'Produto QA'});await post('/materials',{name:'Material QA'});await post('/tasks',{title:'Primeira tarefa QA'});await post('/tasks',{title:'Tarefa em andamento QA',status:1});await post('/tasks',{title:'Tarefa concluída QA',status:2,progress:100});await post('/spaces',{name:'Espaço inicial'});
       await post('/finance',{kind:'receber',description:'Venda QA anterior',amount:10000,due:'2026-09-10'});await post('/finance',{kind:'receber',description:'Venda QA',amount:15000,due:'2026-10-10'});await post('/finance',{kind:'pagar',description:'Insumos QA',amount:2000,due:'2026-10-12',category:'cost'});
       await post('/cost-analyses',{title:'Análise QA',revenue:15000,material:3000,opex:2500,tax:500});
       const department=await post('/departments',{name:'Atendimento QA',lead_employee_id:employee.id});
@@ -53,9 +53,12 @@ try {
         errors.length=0;await page.locator('#ls').fill('qa-test-password');await page.locator('#lf .btn').click();
         await page.locator('[data-sector="rh"]').waitFor();
         await page.locator('[data-dre-charts]').waitFor();
+        await page.locator('[data-task-chart] svg[role=img]').waitFor();assert.equal(await page.locator('[data-task-chart] svg').getAttribute('aria-label'),'1 de 3 tarefas concluídas, 33%');
+        assert(await page.locator('[data-task-chart]').isVisible(),'Task chart must remain visible outside expanded details');
         assert(await page.locator('#tabs button').evaluateAll(nodes=>nodes.every(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth})), 'All navigation sectors must fit');
         await page.getByText('Ver mais gráficos',{exact:true}).click();await page.getByRole('heading',{name:'DRE sintético · lucro por análise'}).waitFor();await page.getByText('Ver mais gráficos',{exact:true}).click();
         assert.equal(await page.locator('[data-setup]').count(),0);
+        await page.waitForFunction(()=>document.querySelector('[data-task-chart] .cnt')?.textContent==='33%');
         await page.screenshot({path:`${output}/sigi-${name}-painel-${viewport}.png`,fullPage:true});
         const navigate=async(group,tab)=>{if(await page.locator(`[data-sector="${group}"]`).getAttribute('aria-expanded')!=='true')await page.locator(`[data-sector="${group}"]`).click();await page.locator(`#submenuItems [data-t="${tab}"]`).click();};
         await page.locator('[data-sector="rh"]').click();assert.equal(await page.locator('[data-sector="rh"]').getAttribute('aria-expanded'),'true');await page.locator('[data-sector="rh"]').click();assert.equal(await page.locator('[data-sector="rh"]').getAttribute('aria-expanded'),'false');
@@ -94,7 +97,7 @@ try {
         await navigate('security','seguranca');await page.getByRole('combobox',{name:'Funcionário cadastrado',exact:true}).waitFor();
         await navigate('rh','departamentos');await page.getByRole('combobox',{name:'Chefe cadastrado',exact:true}).first().waitFor();
         assert.deepEqual(errors,[]);
-        verdict.push({build:name,viewport,ok:true,flows:['unified-login','username-session','mobile-menu','visual-employees','monthly-annual-totals','bonuses','employee-create-edit','navigation','onboarding','dashboard-charts','payroll','benefits','close','payment','receipt','dre-import','dre-export','manager-dre','employee-gps','space','staff','event','edit']});
+        verdict.push({build:name,viewport,ok:true,flows:['task-gauge','unified-login','username-session','mobile-menu','visual-employees','monthly-annual-totals','bonuses','employee-create-edit','navigation','onboarding','dashboard-charts','payroll','benefits','close','payment','receipt','dre-import','dre-export','manager-dre','employee-gps','space','staff','event','edit']});
         await context.close();
         // Department managers can use DRE without loading admin-only endpoints.
         const managerContext=await browser.newContext({viewport:{width,height},reducedMotion:'reduce'}),managerPage=await managerContext.newPage();

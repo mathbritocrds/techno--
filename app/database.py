@@ -39,7 +39,9 @@ class PostgresConnection:
         self.connection = connection
 
     def execute(self, query, params=()):
-        query = query.replace("?", "%s")
+        # Escape SQL percent literals before introducing Psycopg placeholders.
+        # LIKE patterns such as payroll:% must not consume parameter values.
+        query = query.replace("%", "%%").replace("?", "%s")
         if query.strip().upper() == "BEGIN IMMEDIATE":
             query = "SELECT pg_advisory_xact_lock(624318209)"
         cursor = self.connection.cursor(cursor_factory=RealDictCursor)
