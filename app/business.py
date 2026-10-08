@@ -43,6 +43,11 @@ class PayrollProfile(BaseModel):
         return self
 
 
+class BonusIn(BaseModel):
+    amount: float = Field(default=0, ge=0, le=10000000, allow_inf_nan=False)
+    note: str = Field(default='', max_length=500)
+
+
 class ClosePayroll(BaseModel):
     month: str
 
@@ -105,7 +110,8 @@ def payroll_data(m, month, c=None):
                 continue
             records = m.rows(c.execute('SELECT * FROM vacation_records WHERE employee_id=?', (employee['id'],)))
             overtime = round(timesheet.get(employee['id'], {}).get('overtime', 0), 2)
-            employees.append(hr.calculate(employee, p, month, overtime, records))
+            bonus = c.execute('SELECT amount FROM employee_bonuses WHERE employee_id=? AND month=?', (employee['id'], month)).fetchone()
+            employees.append(hr.calculate(employee, p, month, overtime, records, bonus['amount'] if bonus else 0))
     for employee in employees:
         fgts = c.execute('SELECT i.snapshot FROM payroll_items i JOIN payroll_runs r ON r.id=i.run_id WHERE i.employee_id=? AND r.month<=?', (employee['id'], month)).fetchall()
         employee['fgts_accumulated'] = hr.money(sum(hr.D(json.loads(row['snapshot'])['fgts']) for row in fgts))
@@ -189,6 +195,32 @@ def register_routes(m):
             c.execute(f'INSERT INTO employee_payroll_profiles(employee_id,{keys}) VALUES({",".join("?" for _ in range(len(data)+1))}) ON CONFLICT(employee_id) DO UPDATE SET {updates}', (eid, *data.values()))
         return {'ok': True}
 
+    @app.get('/employees/{eid}/bonuses/{month}', dependencies=[Depends(m.admin)])
+    def get_bonus(eid: int, month: str):
+        month_or_error(month)
+        with m.db() as c:
+            if not c.execute('SELECT 1 FROM employees WHERE id=?', (eid,)).fetchone():
+                raise HTTPException(404, 'Funcionário não encontrado.')
+            row = c.execute('SELECT * FROM employee_bonuses WHERE employee_id=? AND month=?', (eid, month)).fetchone()
+        return dict(row) if row else {'employee_id': eid, 'month': month, 'amount': 0, 'note': ''}
+
+    @app.put('/employees/{eid}/bonuses/{month}', dependencies=[Depends(m.admin)])
+    def set_bonus(eid: int, month: str, bonus: BonusIn, who=Depends(m.admin_context)):
+        month_or_error(month)
+        try:
+            hr.tax_rules(month)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        with m.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM employees WHERE id=? AND active=1', (eid,)).fetchone():
+                raise HTTPException(404, 'Funcionário ativo não encontrado.')
+            if c.execute('SELECT 1 FROM payroll_runs WHERE month=?', (month,)).fetchone():
+                raise HTTPException(409, 'Folha fechada: a bonificação deste mês não pode ser alterada.')
+            c.execute('INSERT INTO employee_bonuses(employee_id,month,amount,note,updated_at,updated_by) VALUES(?,?,?,?,?,?) ON CONFLICT(employee_id,month) DO UPDATE SET amount=excluded.amount,note=excluded.note,updated_at=excluded.updated_at,updated_by=excluded.updated_by',
+                      (eid, month, hr.money(bonus.amount), bonus.note.strip(), m.iso(m.utcnow()), who['user']))
+        return {'ok': True}
+
     @app.post('/payroll/close', dependencies=[Depends(m.admin)])
     def close(payload: ClosePayroll, who=Depends(m.admin_context)):
         month = month_or_error(payload.month)
@@ -224,17 +256,20 @@ def register_routes(m):
             if data['closed']:
                 closed_months.append(month)
             for e in data['employees']:
-                item = consolidated.setdefault(e['id'], {'id': e['id'], 'name': e['name'], 'actual_closed': 0, 'projected_open': 0, 'fgts': 0, 'benefits': 0, 'provisions': 0, 'employer_charges': 0, 'salary': 0})
+                item = consolidated.setdefault(e['id'], {'id': e['id'], 'name': e['name'], 'actual_closed': 0, 'projected_open': 0, 'fgts': 0, 'benefits': 0, 'provisions': 0, 'employer_charges': 0, 'salary': 0, 'net_closed': 0, 'net_projected': 0, 'bonuses': 0})
                 key = 'actual_closed' if data['closed'] else 'projected_open'
                 item[key] += e['accrual_cost']
+                item['net_closed' if data['closed'] else 'net_projected'] += e['net']
+                item['bonuses'] += e.get('bonus_amount', 0)
                 for k, value in [('fgts', e['fgts']), ('benefits', e['benefits']+e['vt_amount']-e['vt_discount']+e['va_amount']-e['va_discount']), ('provisions', e['thirteenth_provision']+e['vacation_provision']+e['provision_charges']-e['vacation_salary_offset']-e['vacation_charge_offset']), ('employer_charges', e['employer_charges']), ('salary', e['gross'])]:
                     item[k] += value
         for item in consolidated.values():
             item['total'] = item['actual_closed']+item['projected_open']
+            item['net_total'] = item['net_closed']+item['net_projected']
             for k in list(item):
                 if k not in ('id', 'name'):
                     item[k] = hr.money(item[k])
-        return {'year': year, 'closed_months': closed_months, 'employees': list(consolidated.values()), 'basis': 'Folhas fechadas + projeção das abertas; férias provisionadas separadamente do salário.'}
+        return {'year': year, 'closed_months': closed_months, 'employees': list(consolidated.values()), 'total_cost': hr.money(sum(hr.D(e['total']) for e in consolidated.values())), 'total_net': hr.money(sum(hr.D(e['net_total']) for e in consolidated.values())), 'basis': 'Folhas fechadas + projeção das abertas; férias provisionadas separadamente do salário.'}
 
     @app.post('/employees/{eid}/vacations/quote', dependencies=[Depends(m.admin)])
     def vacation_quote(eid: int, payload: VacationIn):

@@ -16,3 +16,67 @@
 .chip input[type=file]{position:absolute;width:1px;height:1px;opacity:0;padding:0;margin:0;overflow:hidden}
 .chip:focus-within{outline:2px solid var(--b);outline-offset:2px}
 @media(max-width:720px){.app>nav #employeeTabs{order:2;width:100%;max-width:100%;overflow-x:auto;border-radius:14px}}
+
+/* Quiet surfaces, consistent rhythm and concise, accessible motion. */
+:root{--space-section:20px;--radius-control:12px;--duration-ui:.18s}
+body,:root[data-theme=dark] body{background:var(--bg)}
+.orbs{display:none}.logo .mk{animation:none}
+.card{box-shadow:0 3px 16px rgba(20,45,30,.035);backdrop-filter:none}
+.btn,.chip,input,select{min-height:44px}
+.btn{color:var(--btn-ink)}
+.tabs button{min-height:44px}.pill{transition-duration:var(--duration-ui)}
+main.leave{animation-duration:.15s}.view,.fi,.play,.app nav{animation-duration:var(--duration-ui)}
+.login{min-height:calc(100svh - 40px);padding:24px 0}.lc{max-width:420px;padding:28px}
+.login-company{margin:22px 0 8px;font-size:13px;color:var(--mute);overflow-wrap:anywhere}
+.lc .lh1{margin:0 0 8px;font-size:30px}.lc #lsub{margin:0 0 24px}
+.lc input,.lc select{font-size:16px}.lc label{margin-top:16px}
+.lc .btn.l{margin-top:20px}.password-field{position:relative}
+.password-field input{padding-right:84px}
+.password-field button{position:absolute;right:4px;top:0;bottom:0;min-width:72px;border:0;background:transparent;color:var(--ink);font:500 13px Outfit,sans-serif;cursor:pointer;border-radius:10px}
+.password-field button:focus-visible{outline:2px solid var(--b);outline-offset:-3px}
+.field-error{display:block;color:var(--r);font-size:13px;margin:5px 0 0;line-height:1.5}
+.field-error:empty{display:none}input[aria-invalid=true]{border-color:var(--r)}
+.login-shortcuts{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);display:grid;gap:10px;text-align:center}
+.login-shortcut{width:100%;background:transparent}.account-link{font:400 13px Outfit,sans-serif;color:var(--mute);border:0;background:none;text-decoration:underline;text-underline-offset:3px;min-height:44px;cursor:pointer}
+.nav-location{font-size:12px;color:var(--mute);margin:2px 4px 12px}
+.section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:var(--space-section)}
+.section-heading h1{margin:0 0 6px}.section-heading .sub{margin:0}.section-heading>.btn,.section-heading>.chip{flex-shrink:0}
+.overview-kpis,.payroll-kpis{margin-top:16px}.overview-kpis .big,.payroll-kpis .big{font-size:28px;overflow-wrap:anywhere}
+.overview-kpis .card,.payroll-kpis .card{padding:20px}.overview-kpis .d,.payroll-kpis .d{font-size:12px;line-height:1.5;margin-top:8px}
+.overview-section{margin:24px 0 14px;align-items:center}.overview-section>div{flex:1}.overview-section>.chip{flex:none}.overview-section h2{font-size:21px;margin:0 0 4px}.overview-section .sub{margin:0}
+.more-charts,.overview-operations{margin-top:16px}.more-charts>details>summary{font-weight:500}.more-charts .dash-charts{margin-top:16px}
+.task-summary{display:flex;align-items:baseline;gap:8px;margin:16px 0}.task-summary strong{font:500 24px Fraunces,serif}.task-summary span{font-size:13px;color:var(--mute)}
+.overview-updated{margin-top:20px;text-align:right;font-size:12px}.onboarding-card{margin-bottom:20px}.onboarding-card .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.payroll-toolbar{align-items:center;margin:0}.payroll-toolbar>label{flex:none;display:flex;align-items:center;gap:8px;font-size:13px}.payroll-toolbar input{width:165px;min-width:0}.payroll-toolbar>.chip,.payroll-toolbar>.tag{flex:none}
+.employee-filter{align-items:flex-end;justify-content:space-between;margin:24px 0 16px}.employee-search{display:grid;gap:6px;font-size:13px;max-width:400px}.employee-filter>.sub{flex:none;font-size:13px;margin:0 0 10px}
+.employee-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px;align-items:start}
+.employee-card{min-width:0;padding:20px}.employee-identity{display:flex;align-items:center;gap:12px}.employee-identity>div{min-width:0}.employee-identity h2{font:500 20px Fraunces,serif;overflow-wrap:anywhere;margin:0 0 4px}.employee-identity p{font-size:13px;color:var(--mute);margin:0;overflow-wrap:anywhere}
+.employee-avatar{height:44px;width:44px;flex-shrink:0;display:grid;place-items:center;border-radius:14px;background:color-mix(in srgb,var(--g) 14%,var(--card));color:var(--ink);font-weight:500;font-size:15px}
+.employee-pay{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px 0;margin-top:4px;border-bottom:1px solid var(--line)}.employee-pay span{display:block;font-size:12px;color:var(--mute);margin-bottom:5px}.employee-pay strong{font-weight:500;font-size:17px}
+.employee-totals{display:grid;grid-template-columns:1fr 1fr;gap:16px 12px;margin:20px 0}.employee-totals dt{font-size:12px;color:var(--mute)}.employee-totals dd{margin:5px 0 0;font-size:18px;font-weight:500;overflow-wrap:anywhere}
+.employee-actions{display:flex;flex-wrap:wrap;gap:6px}.employee-actions .chip{font-size:12px;padding:8px 10px;background:transparent}
+.employee-details{border-top:1px solid var(--line);padding-top:14px;margin-top:16px}.employee-details summary{font-size:13px;color:var(--ink);min-height:30px;cursor:pointer}.employee-details dl>div{display:flex;justify-content:space-between;gap:14px;font-size:13px;padding:6px 0}.employee-details dd{margin:0;white-space:nowrap}.employee-details .sub{font-size:12px}
+.form-grid{margin:16px 0}.form-grid>label{display:grid;gap:6px;margin:0;font-size:13px}.form-grid input,.form-grid select{min-width:0;width:100%}.salary-compact{padding:8px 10px}.task-dialog input,.task-dialog select{font-size:15px}
+@media(max-width:720px){
+ #root{padding:14px}.lc{padding:24px}.login{padding:12px 0;min-height:calc(100svh - 28px)}
+ .app>nav #tabs,.app>nav #employeeTabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;overflow:visible;padding:4px;border-radius:14px;margin-top:8px}
+ .app>nav .tabs button{min-width:0;white-space:normal;padding:8px 3px;border-radius:10px;font-size:12px;line-height:1.3;min-height:44px}
+ .app>nav .tabs .pill{display:none}.app>nav .tabs button.on{background:color-mix(in srgb,var(--g) 20%,var(--card));color:var(--ink)}
+ .nav-chevron{margin-left:5px}.submenu-items{gap:6px}.submenu-items .chip{min-height:44px;font-size:12px}.nav-location{margin-top:8px}
+ .section-heading{align-items:flex-start;flex-wrap:wrap;gap:12px}.section-heading h1{font-size:26px}.section-heading>.btn{width:100%}
+ .overview-kpis,.payroll-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.overview-kpis .card,.payroll-kpis .card{padding:14px}.overview-kpis h3,.payroll-kpis h3{font-size:12px}.overview-kpis .big,.payroll-kpis .big{font-size:21px}.overview-kpis .d,.payroll-kpis .d{font-size:11px}
+ .payroll-toolbar{gap:8px}.payroll-toolbar>.sp{display:none}.payroll-toolbar>.chip{flex:1;font-size:12px}.payroll-toolbar>label{flex:1}.payroll-toolbar input{width:145px}
+ .employee-grid{grid-template-columns:1fr}.employee-card{padding:18px}.employee-totals dd{font-size:17px}.employee-filter{gap:8px}.employee-search{max-width:none;flex-basis:100%}.employee-filter>.sub{margin:0}
+ .overview-section>.chip{flex-basis:100%}.overview-updated{text-align:left}.task-dialog{padding:18px}.form-grid{grid-template-columns:1fr 1fr;gap:12px}.form-grid label{font-size:12px}.form-grid input,.form-grid select{font-size:16px}
+ table th,table td{font-size:13px}.overview-operations{grid-template-columns:1fr}
+}
+@media(max-width:350px){.form-grid{grid-template-columns:1fr}.employee-totals dd{font-size:15px}}
+@media(prefers-reduced-motion:reduce){.sector-submenu,.submenu-items,.nav-chevron{transition:none}}
+.employee-card[hidden],#hrNoResults[hidden]{display:none}
+.overview-kpis .big,.payroll-kpis .big{display:block;white-space:nowrap;font-size:26px}
+.overview-kpis .d,.payroll-kpis .d{display:block}
+@media(max-width:720px){.overview-kpis .big,.payroll-kpis .big{font-size:clamp(15px,4.5vw,21px)}}
+.login .mk{animation:none}
+#root>.out{animation-duration:.18s}
+.animate .rise,.animate tr,.animate .dash-track i,.animate .cost-row,.animate .cost-track i{animation-duration:.22s;animation-delay:0s}
+.overview-kpis .d,.payroll-kpis .d{margin-left:0}

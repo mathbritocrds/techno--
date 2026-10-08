@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 D = lambda value: Decimal(str(value))
 ZERO = D(0)
-RULES_VERSION = 'BR-2026.2'
+RULES_VERSION = 'BR-2026.3'
 PROFILE_DEFAULTS = dict(hired_on='', terminated_on='', dependents=0, alimony=0,
     other_deductions=0, vt_amount=0, vt_rate=.06, va_amount=0, va_discount=0,
     fgts_rate=.08, employer_rate=.20, vacation_days=30, variable_average=0)
@@ -95,7 +95,7 @@ def entitlement(profile, as_of, records):
             'vacation_total': money(D(proportional) + sum((D(c['amount']) for c in cycles), ZERO)), 'vacation_months': months}
 
 
-def calculate(employee, profile, month, overtime_hours=0, records=()):
+def calculate(employee, profile, month, overtime_hours=0, records=(), bonus_amount=0):
     start, end = validate_month(month)
     tax_rules(month)
     p = {**PROFILE_DEFAULTS, **profile}
@@ -105,7 +105,8 @@ def calculate(employee, profile, month, overtime_hours=0, records=()):
     fraction = D(1) if days == (end-start).days+1 else min(D(1), D(days)/30)
     salary = D(employee['salary'])
     ot = D(money(D(overtime_hours) * salary / 220 * D('1.5'))) if days else ZERO
-    gross = D(money(salary * fraction + ot))
+    bonus = D(money(bonus_amount)) if days else ZERO
+    gross = D(money(salary * fraction + ot + bonus))
     contribution = inss(gross, month)
     taxes = irrf(gross, contribution, p, month)
     vt = D(money(D(p['vt_amount']) * fraction))
@@ -125,7 +126,7 @@ def calculate(employee, profile, month, overtime_hours=0, records=()):
     vacation_charge_offset = D(money(vacation_salary_offset * (D(p['fgts_rate'])+D(p['employer_rate']))))
     cash_cost = gross + benefit_cash + vt-vt_discount + va-va_discount + fgts + employer
     result = {'id': employee['id'], 'name': employee['name'], 'role': employee['role'], 'department_id': employee['department_id'],
-        'base_salary': float(salary), 'gross': float(gross), 'overtime_hours': overtime_hours,
+        'base_salary': float(salary), 'bonus_amount': float(bonus), 'gross': float(gross), 'overtime_hours': overtime_hours,
         'overtime_pay': float(ot), 'inss': contribution, **taxes, 'benefits': float(benefit_cash),
         'vt_amount': float(vt), 'vt_discount': float(vt_discount), 'va_amount': float(va), 'va_discount': float(va_discount),
         'fgts': float(fgts), 'employer_charges': float(employer),

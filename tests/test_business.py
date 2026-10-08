@@ -302,3 +302,115 @@ def test_dre_rejects_conflicting_references_and_csv_formula_roundtrip(service):
     exported=client.get('/finance/dre/export.csv?start=2026-10&end=2026-10',headers=auth).text
     assert "'=SUM(1)" in exported
     assert client.post('/finance/dre/import',json={'content':exported,'preview':False},headers=auth).json()['imported']==0
+
+
+def test_unified_sign_in_username_keeps_canonical_session(service):
+    client, auth = service
+    with main.db() as c:
+        c.execute('UPDATE admins SET username=? WHERE "user"=?', ('Gestor Financeiro', 'business@test.com'))
+    login = client.post('/auth/sign-in', json={'user':'GESTOR FINANCEIRO','password':'business-test-password'})
+    assert login.status_code == 200 and login.json()['role'] == 'admin'
+    session = {'Authorization':'Bearer '+login.json()['token']}
+    assert client.get('/auth/account', headers=session).json()['email'] == 'business@test.com'
+    for path in ['/finance', '/finance/summary', '/finance/dre?start=2026-10&end=2026-10', '/payroll?month=2026-10']:
+        assert client.get(path, headers=session).status_code == 200
+    assert client.get('/auth/branding').json() == {'name': ''}
+    client.put('/settings/company', json={'name':'Equipe Verde','cnpj':''}, headers=auth)
+    assert client.get('/auth/branding').json() == {'name':'Equipe Verde'}
+
+
+def test_unified_employee_sign_in_restricts_finance_and_inactive_accounts(service):
+    client, auth = service
+    eid = employee(service)
+    assert client.post(f'/employees/{eid}/account', json={'email':'worker@test.com','password':'worker-password'}, headers=auth).status_code == 201
+    login = client.post('/auth/sign-in', json={'email':'WORKER@test.com','password':'worker-password'})
+    assert login.json()['role'] == 'employee'
+    worker_auth = {'Authorization':'Bearer '+login.json()['token']}
+    assert client.get('/employee/payroll?month=2026-10', headers=worker_auth).status_code == 200
+    assert client.post('/auth/register',json={'email':'worker@test.com','password':'another-password'},headers=auth).status_code == 409
+    assert client.get('/finance/dre?start=2026-10&end=2026-10', headers=worker_auth).status_code == 403
+    client.patch(f'/employees/{eid}', json={'active':False}, headers=auth)
+    assert client.post('/auth/sign-in', json={'email':'worker@test.com','password':'worker-password'}).status_code == 401
+
+
+def test_monthly_bonus_updates_payroll_annual_dre_and_freezes(service):
+    client, auth = service
+    eid = employee(service, salary=5000)
+    assert client.get(f'/employees/{eid}/bonuses/2026-10', headers=auth).json()['amount'] == 0
+    assert client.put(f'/employees/{eid}/bonuses/2026-10', json={'amount':1000,'note':'Meta alcançada'}, headers=auth).status_code == 200
+    october = client.get('/payroll?month=2026-10', headers=auth).json()
+    item = october['employees'][0]
+    assert item['bonus_amount'] == 1000 and item['gross'] == 6000
+    assert item['inss'] == hr.inss(6000) and item['fgts'] == 480 and item['employer_charges'] == 1200
+    assert item['net'] == round(6000-item['inss']-item['irrf'], 2)
+    assert client.get('/payroll?month=2026-09', headers=auth).json()['employees'][0]['bonus_amount'] == 0
+    annual = client.get('/payroll/annual-cost?year=2026', headers=auth).json()
+    assert annual['employees'][0]['bonuses'] == 1000
+    baseline = hr.calculate({'id':eid,'name':'Colaborador','role':'','department_id':None,'salary':5000,'benefits':0}, {'hired_on':'2026-01-01'}, '2026-09')
+    assert annual['total_net'] == pytest.approx(baseline['net']*11+item['net'], abs=.01)
+    assert annual['total_cost'] == pytest.approx(baseline['accrual_cost']*11+item['accrual_cost'], abs=.01)
+    assert client.get('/finance/dre?start=2026-10&end=2026-10',headers=auth).json()['personnel'] == 0
+    assert client.put(f'/employees/{eid}/bonuses/2026-10', json={'amount':-1}, headers=auth).status_code == 422
+    assert client.put(f'/employees/{eid}/bonuses/2027-01', json={'amount':1}, headers=auth).status_code == 422
+    assert client.put(f'/employees/{eid}/bonuses/invalid', json={'amount':1}, headers=auth).status_code == 400
+    assert client.get(f'/employees/{eid}/bonuses/2026-10').status_code == 401
+    assert client.get('/employees/999999/bonuses/2026-10',headers=auth).status_code == 404
+    assert client.post('/payroll/close', json={'month':'2026-10'}, headers=auth).status_code == 200
+    assert client.get('/finance/dre?start=2026-10&end=2026-10',headers=auth).json()['personnel'] == item['accrual_cost']
+    assert client.put(f'/employees/{eid}/bonuses/2026-10', json={'amount':2000}, headers=auth).status_code == 409
+    assert client.get('/finance?status=open',headers=auth).json()[0]['amount'] == item['net']
+    annual = client.get('/payroll/annual-cost?year=2026',headers=auth).json()
+    assert annual['employees'][0]['net_closed'] == item['net']
+    assert annual['employees'][0]['net_total'] == annual['total_net']
+    assert client.get('/payroll?month=2026-10', headers=auth).json()['employees'][0]['bonus_amount'] == 1000
+
+
+def test_unified_sign_in_does_not_bypass_totp_or_fallback_role(service):
+    client, auth = service
+    eid = employee(service)
+    # Existing installations may have the same e-mail in separate legacy tables.
+    with main.db() as c:
+        salt = 'aabbccdd'
+        c.execute('UPDATE admins SET totp_enabled=1,totp_secret=? WHERE "user"=?', ('JBSWY3DPEHPK3PXP','business@test.com'))
+        c.execute('UPDATE employees SET account_email=?,account_salt=?,account_hash=? WHERE id=?', ('business@test.com',salt,main.hash_pin('worker-password',salt),eid))
+    assert client.post('/auth/sign-in',json={'email':'business@test.com','password':'worker-password'}).status_code == 401
+    step = client.post('/auth/sign-in',json={'email':'business@test.com','password':'business-test-password'}).json()
+    assert step == {'requires_otp': True} and 'token' not in step
+    assert client.post('/auth/sign-in',json={'email':'business@test.com','password':'business-test-password','totp_code':'bad'}).status_code == 401
+
+
+def test_employee_creation_with_admission_and_access_is_atomic(service):
+    client, auth = service
+    payload = {'name':'Nova Pessoa','salary':2500,'pin':'4321','hired_on':'2026-10-01','account_email':'new@test.com','account_password':'new-password'}
+    response = client.post('/employees',json=payload,headers=auth)
+    assert response.status_code == 201
+    eid = response.json()['id']
+    assert client.get(f'/employees/{eid}/payroll-profile',headers=auth).json()['hired_on'] == '2026-10-01'
+    assert client.post('/auth/sign-in',json={'email':'new@test.com','password':'new-password'}).json()['role'] == 'employee'
+    before = len(client.get('/employees',headers=auth).json())
+    assert client.post('/employees',json=payload,headers=auth).status_code == 409
+    assert client.post('/employees',json={**payload,'account_email':'another@test.com','account_password':'short'},headers=auth).status_code == 422
+    assert client.post('/employees',json={**payload,'hired_on':'invalid'},headers=auth).status_code == 422
+    assert client.post('/employees',json={**payload,'department_id':99999},headers=auth).status_code == 404
+    assert len(client.get('/employees',headers=auth).json()) == before
+
+
+def test_employee_can_edit_own_reservation_and_cannot_edit_others(service):
+    client, auth = service
+    eid = employee(service)
+    client.post(f'/employees/{eid}/account',json={'email':'booking@test.com','password':'booking-password'},headers=auth)
+    token = client.post('/auth/sign-in',json={'email':'booking@test.com','password':'booking-password'}).json()['token']
+    worker = {'Authorization':'Bearer '+token}
+    assert client.put(f'/employees/{eid}/bonuses/2026-10',json={'amount':100},headers=worker).status_code == 403
+    sid = client.post('/spaces',json={'name':'Sala A','capacity':10},headers=auth).json()['id']
+    other_sid = client.post('/spaces',json={'name':'Sala B','capacity':10},headers=auth).json()['id']
+    payload = {'space_id':sid,'title':'Reserva própria','starts_at':'2026-10-20T10:00:00Z','ends_at':'2026-10-20T11:00:00Z','attendees':5}
+    own = client.post('/space-bookings',json=payload,headers=worker).json()['id']
+    other = client.post('/space-bookings',json={**payload,'title':'Reserva do administrador','starts_at':'2026-10-20T12:00:00Z','ends_at':'2026-10-20T13:00:00Z'},headers=auth).json()['id']
+    rows = client.get('/employee/spaces',headers=worker).json()['bookings']
+    assert next(b for b in rows if b['id']==own)['can_edit']
+    assert not next(b for b in rows if b['id']==other)['can_edit']
+    assert client.patch(f'/space-bookings/{other}',json=payload,headers=worker).status_code == 403
+    assert client.patch(f'/space-bookings/{own}',json={**payload,'space_id':other_sid,'title':'Reserva alterada','details':'Novo recurso'},headers=worker).status_code == 200
+    updated = next(b for b in client.get('/employee/spaces',headers=worker).json()['bookings'] if b['id']==own)
+    assert updated['space_id'] == other_sid and updated['details'] == 'Novo recurso'

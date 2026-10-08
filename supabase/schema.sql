@@ -359,3 +359,10 @@ CREATE INDEX IF NOT EXISTS ix_dre_import_month ON dre_import_entries(month,depar
 ALTER TABLE dre_import_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dre_import_entries ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON dre_import_batches,dre_import_entries FROM anon,authenticated;
+
+CREATE TABLE IF NOT EXISTS employee_bonuses(
+ employee_id BIGINT NOT NULL REFERENCES employees(id), month TEXT NOT NULL,
+ amount DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK(amount>=0), note TEXT NOT NULL DEFAULT '',
+ updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(employee_id,month));
+ALTER TABLE employee_bonuses ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON employee_bonuses FROM anon,authenticated;

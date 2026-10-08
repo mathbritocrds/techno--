@@ -37,6 +37,7 @@ TABLES = (
     "audit_log",
     "notification_channels",
     "employee_payroll_profiles",
+    "employee_bonuses",
     "payroll_runs",
     "payroll_items",
     "vacation_records",

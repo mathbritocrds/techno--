@@ -1,4 +1,4 @@
-const CACHE = "sigi-shell-v3";
+const CACHE = "sigi-shell-v4";
 const SHELL = ["/", "/business.js", "/enhancements.js", "/enhancements.css", "/service-worker.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", event => {

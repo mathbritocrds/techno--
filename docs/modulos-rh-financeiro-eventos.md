@@ -2,7 +2,7 @@
 
 ## Arquitetura
 
-A implementação amplia o SIGI existente: FastAPI, HTML/JavaScript no mesmo domínio e SQLite ou PostgreSQL/Supabase. Mantém navegação, calendário, cores, cards, tabelas e diálogo existentes. `app/static/business.js` acrescenta controles às três telas; o salário base recebe apenas redução de espaçamento. Os arquivos preexistentes de infraestrutura TanStack permanecem no repositório, mas a aplicação executada é FastAPI. O build agora valida Python e JavaScript e empacota essa aplicação em `dist/sigi`; o preview de produção executa o pacote construído.
+A implementação amplia o SIGI existente: FastAPI, HTML/JavaScript no mesmo domínio e SQLite ou PostgreSQL/Supabase. Mantém navegação, calendário, cores, cards, tabelas e diálogo existentes. `app/static/business.js` acrescenta controles às três telas; o salário base recebe redução de espaçamento. O pacote de [login, folha e reservas](login-folha-reservas.md) evolui a apresentação de funcionários para cartões e acrescenta bonificações por competência. Os arquivos preexistentes de infraestrutura TanStack permanecem no repositório, mas a aplicação executada é FastAPI. O build agora valida Python e JavaScript e empacota essa aplicação em `dist/sigi`; o preview de produção executa o pacote construído.
 
 | Arquivo | Responsabilidade |
 | --- | --- |
