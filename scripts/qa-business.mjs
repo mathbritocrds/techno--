@@ -64,9 +64,16 @@ try {
         await page.locator('[data-sector="rh"]').click();assert.equal(await page.locator('[data-sector="rh"]').getAttribute('aria-expanded'),'true');await page.locator('[data-sector="rh"]').click();assert.equal(await page.locator('[data-sector="rh"]').getAttribute('aria-expanded'),'false');
         await navigate('rh','folha');
         await page.getByRole('heading',{name:'Funcionários e folha',exact:true}).waitFor();
+        await page.getByRole('heading',{name:'Entenda os valores da equipe',exact:true}).waitFor();
+        const assertChartTotal=async(expected)=>{const parts=await page.locator('[data-hr-component]').evaluateAll(nodes=>nodes.map(n=>+n.dataset.hrComponent));assert.equal(parts.length,4);assert(Math.abs(parts.reduce((sum,n)=>sum+n,0)-expected)<.02,'Chart components must reconcile with payroll cost');};
+        const monthPayroll=await (await fetch(base+'/payroll?month=2026-10',{headers})).json();await assertChartTotal(monthPayroll.total_accrual_cost);
+        await page.getByRole('combobox',{name:'Período dos gráficos de funcionários',exact:true}).selectOption('year');await page.locator('[data-hr-chart-period="year"]').waitFor();
+        const annualPayroll=await (await fetch(base+'/payroll/annual-cost?year=2026',{headers})).json();await assertChartTotal(annualPayroll.total_cost);
+        await page.screenshot({path:`${output}/sigi-${name}-folha-graficos-anuais-${viewport}.png`,fullPage:true,animations:'disabled'});
+        await page.getByRole('combobox',{name:'Período dos gráficos de funcionários',exact:true}).selectOption('month');await page.locator('[data-hr-chart-period="month"]').waitFor();
         assert.equal(await page.locator('.employee-card').count(),viewport==='desktop'?2:3);
         await page.getByRole('searchbox',{name:'Buscar funcionário'}).fill('Ponto PIN');assert.equal(await page.locator('.employee-card:visible').count(),1);await page.getByRole('searchbox',{name:'Buscar funcionário'}).fill('');
-        await page.screenshot({path:`${output}/sigi-${name}-folha-${viewport}.png`,fullPage:true});
+        await page.screenshot({path:`${output}/sigi-${name}-folha-${viewport}.png`,fullPage:true,animations:'disabled'});
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Horizontal overflow on payroll');
         await page.getByRole('button',{name:'Benefícios e férias',exact:true}).first().click();await page.locator('[data-profile="vt_amount"]').fill('220');await page.locator('[data-profile="va_amount"]').fill('500');await page.getByRole('button',{name:'Salvar dados de RH'}).click();await page.locator('#taskOverlay').waitFor({state:'hidden'});
         if(viewport==='desktop') {
@@ -74,7 +81,7 @@ try {
           await page.waitForFunction(()=>document.querySelector('.employee-card')?.textContent.includes('750,00'));
           await page.getByRole('button',{name:'Adicionar funcionário',exact:true}).click();await page.locator('#en').fill('Nova Pessoa QA');await page.locator('#ec').fill('Assistente');await page.locator('#es').fill('2200');await page.locator('#ehired').fill('2026-10-01');await page.locator('#ep').fill('5678');await page.getByRole('button',{name:'Salvar funcionário',exact:true}).click();await page.locator('#taskOverlay').waitFor({state:'hidden'});await page.getByRole('heading',{name:'Nova Pessoa QA',exact:true}).waitFor();
           const newCard=page.locator('.employee-card').filter({has:page.getByRole('heading',{name:'Nova Pessoa QA',exact:true})});await newCard.getByRole('button',{name:'Editar cadastro'}).click();await page.locator('#ec').fill('Assistente de eventos');await page.getByRole('button',{name:'Salvar cadastro'}).click();await page.locator('#taskOverlay').waitFor({state:'hidden'});
-          await page.screenshot({path:`${output}/sigi-${name}-folha-${viewport}.png`,fullPage:true});
+          await page.screenshot({path:`${output}/sigi-${name}-folha-${viewport}.png`,fullPage:true,animations:'disabled'});
           page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Fechar folha e gerar contas a pagar'}).click();await page.getByRole('button',{name:'Folha fechada',exact:true}).waitFor();
         }
         await navigate('finance','financeiro');await page.getByRole('heading',{name:'DRE integrada · regime de competência'}).waitFor();
@@ -120,14 +127,14 @@ try {
         await navigate('security','seguranca');await page.getByRole('combobox',{name:'Funcionário cadastrado',exact:true}).waitFor();
         await navigate('rh','departamentos');await page.getByRole('combobox',{name:'Chefe cadastrado',exact:true}).first().waitFor();
         assert.deepEqual(errors,[]);
-        verdict.push({build:name,viewport,ok:true,flows:['finance-periods','finance-delete-selection','filtered-finance-export','task-gauge','unified-login','username-session','mobile-menu','visual-employees','monthly-annual-totals','bonuses','employee-create-edit','navigation','onboarding','dashboard-charts','payroll','benefits','close','payment','receipt','dre-import','dre-export','manager-dre','employee-gps','space','staff','event','edit']});
+        verdict.push({build:name,viewport,ok:true,flows:['payroll-charts-reconciled','gps-120m','finance-periods','finance-delete-selection','filtered-finance-export','task-gauge','unified-login','username-session','mobile-menu','visual-employees','monthly-annual-totals','bonuses','employee-create-edit','navigation','onboarding','dashboard-charts','payroll','benefits','close','payment','receipt','dre-import','dre-export','manager-dre','employee-gps','space','staff','event','edit']});
         await context.close();
         // Department managers can use DRE without loading admin-only endpoints.
         const managerContext=await browser.newContext({viewport:{width,height},reducedMotion:'reduce'}),managerPage=await managerContext.newPage();
         if(process.env.QA_FONT_CSS)await managerContext.route('https://fonts.googleapis.com/**',route=>route.fulfill({contentType:'text/css',body:readFileSync(process.env.QA_FONT_CSS,'utf8')}));
         await managerPage.goto(base);await managerPage.locator('#lu').fill('manager@example.test');await managerPage.locator('#ls').fill('manager-test-password');await managerPage.locator('#lf .btn').click();await managerPage.locator('[data-sector="finance"]').click();await managerPage.locator('#submenuItems [data-t="financeiro"]').click();await managerPage.getByRole('heading',{name:'Financeiro do departamento'}).waitFor();await managerPage.getByRole('button',{name:'Exportar DRE CSV / Excel'}).waitFor();assert.equal(await managerPage.locator('#submenuItems [data-t="folha"]').count(),0);assert(await managerPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Horizontal overflow on manager finance');await managerContext.close();
         // GPS consent and employee entry work on both viewports.
-        const employeeContext=await browser.newContext({viewport:{width,height},geolocation:{latitude:-23.55,longitude:-46.63,accuracy:10},permissions:['geolocation'],reducedMotion:'reduce'}),employeePage=await employeeContext.newPage();
+        const employeeContext=await browser.newContext({viewport:{width,height},geolocation:{latitude:-23.55,longitude:-46.63,accuracy:120},permissions:['geolocation'],reducedMotion:'reduce'}),employeePage=await employeeContext.newPage();
         if(process.env.QA_FONT_CSS)await employeeContext.route('https://fonts.googleapis.com/**',route=>route.fulfill({contentType:'text/css',body:readFileSync(process.env.QA_FONT_CSS,'utf8')}));
         await employeePage.goto(base);await employeePage.locator('#lu').fill('employee@example.test');await employeePage.locator('#ls').fill('employee-test-password');await employeePage.locator('#lf .btn').click();await employeePage.locator('#employeeClockConsent').check();
         if(viewport==='desktop'){await employeePage.getByRole('button',{name:/Registrar entrada com GPS/}).click();await employeePage.getByRole('button',{name:/Registrar saída com GPS/}).waitFor();}
@@ -136,7 +143,7 @@ try {
         if(viewport==='desktop'){await employeePage.locator('[data-employee-tab="espacos"]').click();await employeePage.locator('#employeeBookingSpace').selectOption({label:'Espaço inicial · gestao'});await employeePage.locator('#employeeBookingTitle').fill('Reserva do colaborador');await employeePage.locator('#employeeBookingStart').fill('2026-10-20T10:00');await employeePage.locator('#employeeBookingEnd').fill('2026-10-20T11:00');await employeePage.getByRole('button',{name:'Reservar recurso',exact:true}).click();await employeePage.getByRole('button',{name:'Editar reserva',exact:true}).waitFor();await employeePage.getByRole('button',{name:'Editar reserva',exact:true}).click();await employeePage.locator('#eventTitle').fill('Reserva atualizada pelo colaborador');await employeePage.getByRole('button',{name:'Salvar e atualizar escala'}).click();await employeePage.getByText('Espaço inicial · Reserva atualizada pelo colaborador',{exact:true}).waitFor();}
         await employeeContext.close();
         if(viewport==='desktop'){
-          const publicContext=await browser.newContext({viewport:{width,height},geolocation:{latitude:-23.55,longitude:-46.63,accuracy:10},permissions:['geolocation'],reducedMotion:'reduce'}),publicPage=await publicContext.newPage();
+          const publicContext=await browser.newContext({viewport:{width,height},geolocation:{latitude:-23.55,longitude:-46.63,accuracy:120},permissions:['geolocation'],reducedMotion:'reduce'}),publicPage=await publicContext.newPage();
           if(process.env.QA_FONT_CSS)await publicContext.route('https://fonts.googleapis.com/**',route=>route.fulfill({contentType:'text/css',body:readFileSync(process.env.QA_FONT_CSS,'utf8')}));
           await publicPage.goto(base);await publicPage.getByRole('button',{name:'Bater ponto',exact:true}).click();await publicPage.locator('#le').selectOption(String(publicEmployee.id));await publicPage.locator('#lp').fill('4321');await publicPage.locator('#lc').check();await publicPage.getByRole('button',{name:'Registrar ponto',exact:true}).click();await publicPage.locator('#lt').filter({hasText:'Ponto registrado'}).waitFor();await publicContext.close();
         }
