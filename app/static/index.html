@@ -5,7 +5,7 @@
 <meta name="theme-color" content="#171D19">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon.svg?v=logo-20261027" type="image/svg+xml">
 <script>const systemTheme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';const root=document.documentElement;try{root.dataset.theme=localStorage.getItem('theme')||systemTheme;const motion=localStorage.getItem('motion');root.dataset.motion=motion==='full'||motion==='reduced'?motion:'system'}catch(e){root.dataset.theme=systemTheme;root.dataset.motion='system'}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Fraunces:wght@500;600&display=swap">
 <style>
@@ -47,9 +47,9 @@ nav::-webkit-scrollbar{display:none}
 .app nav{animation:navIn .7s var(--ease) backwards}
 @keyframes navIn{from{opacity:0;transform:translateY(-16px)}}
 .logo{font:600 22px Fraunces,Georgia,serif;margin-right:4px;display:flex;align-items:center;gap:8px;flex:none}
-.mk{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,#78B694,#E8A28E);display:inline-block}
-.login .mk{animation:breathe 3.4s ease-in-out infinite}
-@keyframes breathe{50%{transform:scale(1.45);box-shadow:0 0 0 7px rgba(120,182,148,.2)}}
+.site-logo{display:block;width:52px;height:52px;object-fit:contain;border-radius:8px;flex:none}
+.login .site-logo,.boot-content .site-logo{width:104px;height:104px}
+.login .logo-wordmark,.boot-content .logo-wordmark{display:none}
 .tabs,.seg{position:relative;display:flex;flex-wrap:nowrap;gap:2px;padding:4px;border-radius:99px;background:var(--card);border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);flex:none}
 .pill{position:absolute;top:4px;left:0;height:calc(100% - 8px);width:0;border-radius:99px;background:#DCEDE3;box-shadow:0 3px 10px rgba(80,126,103,.12);transition:transform .55s var(--ease),width .55s var(--ease),background-color .5s;pointer-events:none}
 .tabs button,.seg button{position:relative;z-index:1;border:0;background:none;color:var(--ink);padding:8px 14px;border-radius:99px;font:500 13px Outfit,sans-serif;cursor:pointer;white-space:nowrap;transition:color .35s var(--ease)}
@@ -194,7 +194,7 @@ main.leave{animation:leave .21s ease-in forwards}
 </style><link rel="stylesheet" href="/enhancements.css"><link rel="stylesheet" href="/accounting.css">
 </head><body>
 <div class="orbs" aria-hidden="true"><i></i><i></i><i></i></div>
-<div id="root"><div class="boot-screen" role="status" aria-label="Carregando SIGI"><div class="boot-content card"><div class="logo"><i class="mk"></i>SIGI</div><div class="sk" aria-hidden="true"></div><div class="sk" aria-hidden="true"></div><div class="sk" aria-hidden="true"></div><p class="boot-label">Preparando seu espaço de trabalho…</p></div></div></div><div id="toast" role="status" aria-live="polite"></div>
+<div id="root"><div class="boot-screen" role="status" aria-label="Carregando SIGI"><div class="boot-content card"><div class="logo"><img class="site-logo" src="/icon.svg?v=logo-20261027" width="52" height="52" alt="SIGI — Engenharia e Gestão Industrial" decoding="async"><span class="logo-wordmark" aria-hidden="true">SIGI</span></div><div class="sk" aria-hidden="true"></div><div class="sk" aria-hidden="true"></div><div class="sk" aria-hidden="true"></div><p class="boot-label">Preparando seu espaço de trabalho…</p></div></div></div><div id="toast" role="status" aria-live="polite"></div>
 <script>
 const $=s=>document.querySelector(s),R=v=>'R$ '+(+v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -277,7 +277,7 @@ let W=null,BUF=[],LAST=0,FILL=0,CLOCK_TASK_BY_EMPLOYEE={};
 function stopWatch(){if(W!=null&&navigator.geolocation)navigator.geolocation.clearWatch(W);W=null;BUF=[]}
 function tela(){stopWatch();return TOKEN?(ROLE=='employee'?employeeApp():app()):login()}
 async function login(){stopWatch();S.mode='g';
- if(!await swapRoot(`<div class="login"><div class="card lc view"><div class="login-head"><div class="logo"><i class="mk"></i>SIGI</div><div class="login-tools">${themeButton()}</div></div>
+ if(!await swapRoot(`<div class="login"><div class="card lc view"><div class="login-head"><div class="logo"><img class="site-logo" src="/icon.svg?v=logo-20261027" width="52" height="52" alt="SIGI — Engenharia e Gestão Industrial" decoding="async"><span class="logo-wordmark" aria-hidden="true">SIGI</span></div><div class="login-tools">${themeButton()}</div></div>
  <p id="loginCompany" class="login-company"></p><div id="lh"><h1 id="lt" class="lh1"></h1><p class="sub" id="lsub"></p></div>
  <div id="seg" hidden></div><div id="lf"></div><div id="accountShortcut"></div><div id="live" class="msg" style="display:none"></div><div id="lm" aria-live="polite"></div></div></div>`))return;
  placeAll(true);await fillMode(true)}
@@ -364,12 +364,12 @@ addEventListener('online',()=>{updateNetworkStatus();syncOfflineQueue().catch(er
 if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js').catch(error=>console.error('Não foi possível ativar o modo offline:',error));
 async function app(){
  const visible=accessibleTabs();if(!visible.some(tab=>tab[0]===S.tab))S.tab=ROLE==='admin'?'painel':'quadros';
- if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>SIGI</span><div class="tabs" id="tabs"><i class="pill"></i>${sectorNavigation()}</div><span class="sp"></span>
+ if(!await swapRoot(`<div class="app"><nav><span class="logo"><img class="site-logo" src="/icon.svg?v=logo-20261027" width="52" height="52" alt="SIGI — Engenharia e Gestão Industrial" decoding="async"><span class="logo-wordmark" aria-hidden="true">SIGI</span></span><div class="tabs" id="tabs"><i class="pill"></i>${sectorNavigation()}</div><span class="sp"></span>
  ${ROLE!=='operator'?'<button class="chip" onclick="openSearch()" title="Busca global (Ctrl+K) · comandos /">Buscar</button>':''}<span class="offline-indicator" id="networkStatus">${navigator.onLine?'Online':'Offline'}</span>${motionButton()}${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><div id="sectorSubmenu" class="sector-submenu" aria-label="Funcionalidades do setor" inert><div id="submenuItems" class="submenu-items"></div></div><p id="navLocation" class="nav-location"></p><main id="main"></main><div id="searchOverlay" class="search-overlay" hidden onclick="if(event.target===this)closeSearch()"><section class="search-dialog" role="dialog" aria-modal="true" aria-label="Busca global"><div class="row" style="margin:0"><input id="globalSearch" placeholder="Buscar módulos, tarefas, produtos ou pessoas" oninput="searchGlobal()"><button class="chip" onclick="closeSearch()">Fechar</button></div><div id="searchResults" class="search-results"></div></section></div><div id="taskOverlay" class="task-modal-overlay" hidden onclick="if(event.target===this)closeTask()"><section class="task-dialog" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle"><div id="taskDialogContent"></div></section></div></div>`))return;
  syncSectorNavigation();placeAll(true);connectLiveEvents();updateNetworkStatus();if(navigator.onLine)syncOfflineQueue().catch(error=>console.error('Falha ao sincronizar alterações offline:',error));go(S.tab,{first:true})}
 async function employeeApp(){
  if(LIVE_SOCKET){LIVE_SOCKET.close();LIVE_SOCKET=null}
- if(!await swapRoot(`<div class="app"><nav><span class="logo"><i class="mk"></i>SIGI</span><div class="tabs" id="employeeTabs"><i class="pill"></i>${[['inicio','Início'],['solicitacoes','Solicitações'],['ponto','Ponto e folha'],['tarefas','Minhas tarefas'],['espacos','Reservas']].map(([key,label])=>`<button data-employee-tab="${key}" onclick="employeeNavigate('${key}')">${label}</button>`).join('')}</div><span class="sp"></span><span>${esc(CURRENT_NAME)}</span>${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="employeeMain"></main></div>`))return;
+ if(!await swapRoot(`<div class="app"><nav><span class="logo"><img class="site-logo" src="/icon.svg?v=logo-20261027" width="52" height="52" alt="SIGI — Engenharia e Gestão Industrial" decoding="async"><span class="logo-wordmark" aria-hidden="true">SIGI</span></span><div class="tabs" id="employeeTabs"><i class="pill"></i>${[['inicio','Início'],['solicitacoes','Solicitações'],['ponto','Ponto e folha'],['tarefas','Minhas tarefas'],['espacos','Reservas']].map(([key,label])=>`<button data-employee-tab="${key}" onclick="employeeNavigate('${key}')">${label}</button>`).join('')}</div><span class="sp"></span><span>${esc(CURRENT_NAME)}</span>${themeButton()}<button class="chip" onclick="sair()">Sair</button></nav><main id="employeeMain"></main></div>`))return;
  placeAll(true);employeeNavigate('inicio')}
 let EMPLOYEE_TIMER=0;
 async function employeeNavigate(tab){S.employeeTab=tab;clearInterval(EMPLOYEE_TIMER);document.querySelectorAll('#employeeTabs button').forEach(button=>button.classList.toggle('on',button.dataset.employeeTab===tab));placePill($('#employeeTabs'),true);const main=$('#employeeMain');if(!main)return;main.innerHTML=SKEL;try{main.innerHTML=await ({inicio:employeeHome,solicitacoes:employeeRequests,ponto:employeeRecords,tarefas:employeeTaskList,espacos:employeeReservations}[tab]());if(tab==='inicio')startEmployeeCounter()}catch(error){main.innerHTML=`<section class="card empty"><h3>Não foi possível carregar</h3><p>${esc(error.message)}</p><button class="btn" onclick="employeeNavigate('${tab}')">Tentar novamente</button></section>`}}
