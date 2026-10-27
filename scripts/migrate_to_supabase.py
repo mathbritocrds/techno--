@@ -47,6 +47,11 @@ TABLES = (
     "event_staff_assignments",
     "dre_import_batches",
     "dre_import_entries",
+    "ledger_accounts",
+    "ledger_journals",
+    "ledger_lines",
+    "audit_events",
+    "time_entry_adjustments",
 )
 
 
@@ -68,12 +73,12 @@ def main():
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
         with target.cursor() as cursor:
-            for statement in schema.split(";"):
-                if statement.strip():
-                    cursor.execute(statement)
+            cursor.execute(schema)
 
             nonempty = []
             for table in TABLES:
+                if table == 'ledger_accounts':
+                    continue  # The schema seeds only the template chart of accounts.
                 cursor.execute(f"SELECT EXISTS (SELECT 1 FROM {quoted(table)} LIMIT 1)")
                 if cursor.fetchone()[0]:
                     nonempty.append(table)
@@ -85,11 +90,12 @@ def main():
                 )
 
             employee_links = []
+            posted_journals = []
             for table in TABLES:
                 if table not in source_tables:
                     counts[table] = 0
                     continue
-                records = source.execute(f"SELECT * FROM {quoted(table)}").fetchall()
+                records = source.execute(f"SELECT * FROM {quoted(table)}" + (' ORDER BY id' if table=='ledger_journals' else '')).fetchall()
                 columns = [column for column in records[0].keys()] if records else [
                     column[1] for column in source.execute(f"PRAGMA table_info({quoted(table)})")
                 ]
@@ -98,11 +104,15 @@ def main():
                     key_column = 'user' if table=='admins' else 'id'
                     employee_links.extend((table,link_column,key_column,r[key_column],r[link_column]) for r in records if r[link_column] is not None)
                     columns.remove(link_column)
+                if table == 'ledger_journals' and 'status' in columns:
+                    posted_journals = [r['id'] for r in records if r['status']=='posted']
+                    columns.remove('status')  # Insert drafts, copy their lines, then validate posting.
                 if records:
                     column_sql = ", ".join(quoted(column) for column in columns)
                     values_sql = ", ".join(["%s"] * len(columns))
+                    conflict = " ON CONFLICT(code) DO UPDATE SET name=excluded.name,kind=excluded.kind,section=excluded.section,dre_category=excluded.dre_category" if table=='ledger_accounts' else ''
                     cursor.executemany(
-                        f"INSERT INTO {quoted(table)} ({column_sql}) VALUES ({values_sql})",
+                        f"INSERT INTO {quoted(table)} ({column_sql}) VALUES ({values_sql})"+conflict,
                         [tuple(record[column] for column in columns) for record in records],
                     )
                 counts[table] = len(records)
@@ -115,6 +125,7 @@ def main():
 
             for table, column, key_column, key, eid in employee_links:
                 cursor.execute(f"UPDATE {quoted(table)} SET {quoted(column)}=%s WHERE {quoted(key_column)}=%s",(eid,key))
+            cursor.executemany("UPDATE ledger_journals SET status='posted' WHERE id=%s",[(jid,) for jid in posted_journals])
 
     print("Migração concluída. Registros copiados:")
     for table, count in counts.items():

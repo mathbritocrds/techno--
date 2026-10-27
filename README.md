@@ -79,3 +79,11 @@ pytest -q
 Consulte [arquitetura, rotas, modelo de dados e regras de cálculo](docs/modulos-rh-financeiro-eventos.md). Em Folha, configure RH/benefícios e feche a competência para gerar os salários no financeiro. Financeiro inclui DRE e comprovantes no histórico. Espaços permite eventos compatíveis dentro da capacidade e gera escalas com a equipe vinculada. O desenho original das telas foi preservado. As regras fiscais cadastradas cobrem 2026; férias e 13º têm cálculo bruto e provisões, com as limitações de liquidação descritas na documentação.
 
 `npm run build` valida e empacota a aplicação FastAPI em `dist/sigi`. `npm run preview:restart` verifica esse pacote; `npm run test:business` executa os testes Python.
+
+## Contabilidade em partidas dobradas
+
+Em **Financeiro → Contabilidade**, consulte DRE com os 15 níveis solicitados, Balanço Patrimonial e Balancete por mês, ano, intervalo e departamento. Registre lançamentos balanceados, estorne com justificativa e exporte cada demonstração em CSV. Novas contas, pagamentos e folhas fechadas alimentam o razão; a integração do histórico é explícita e pede contrapartidas para importações sem classificação patrimonial.
+
+A implementação mantém a autenticação do SIGI, aplica escopo de departamento e RLS no PostgreSQL e registra os valores anteriores e posteriores nas correções de ponto e de custos de materiais. Consulte [arquitetura, rotas, migração e validações contábeis](docs/contabilidade-cpc51-arquitetura.md).
+
+O console contábil é um módulo React incremental. `npm run build` recompila seu bundle e inclui os arquivos estáticos no pacote Python. Execute `node scripts/test-accounting-pg.mjs` para verificar as políticas e os gatilhos contábeis no PostgreSQL embarcado de testes.

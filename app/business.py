@@ -145,6 +145,8 @@ def record_payment(m, c, transaction, actor):
         (transaction['id'], transaction['kind'], transaction['description'], transaction['amount'],
          transaction['category'], transaction['competence'] or transaction['due'][:7], transaction['paid_at'],
          actor, transaction['department_id'], transaction['source_key']))
+    from app.accounting import sync_payment
+    sync_payment(m,c,transaction,actor)
 
 
 def check_booking(m, c, booking, start, end, exclude_id=0):
@@ -261,6 +263,8 @@ def register_routes(m):
                 c.execute('INSERT INTO payroll_items(run_id,employee_id,snapshot) VALUES(?,?,?)', (run_id, employee['id'], json.dumps(employee, ensure_ascii=False)))
                 if employee['net'] > 0:
                     c.execute("INSERT INTO transactions(kind,description,amount,due,department_id,category,competence,source_key) VALUES('pagar',?,?,?,?,?,?,?)", (f"Salário {month} · {employee['name']}", employee['net'], due, employee['department_id'], 'personnel', month, f'payroll:{run_id}:{employee["id"]}'))
+            from app.accounting import sync_payroll
+            sync_payroll(m,c,run_id,month,who['user'])
         return {'id': run_id, 'already_closed': False}
 
     @app.get('/payroll/annual-cost', dependencies=[Depends(m.admin)])
