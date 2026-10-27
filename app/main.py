@@ -14,7 +14,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import psycopg2
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -23,6 +23,8 @@ from app.database import connect_postgres
 from app.business_schema import SCHEMA as BUSINESS_SCHEMA, MIGRATIONS as BUSINESS_MIGRATIONS
 from app import payroll as hr
 from app import business
+from app import accounting
+from app.accounting_schema import SQLITE_SCHEMA as ACCOUNTING_SCHEMA
 from app.security import generate_totp_secret, provisioning_uri, verify_totp
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -169,7 +171,9 @@ MIGRATIONS = ["ALTER TABLE employees ADD COLUMN cpf TEXT DEFAULT ''",
               "ALTER TABLE time_entries ADD COLUMN labor_rate REAL"]
 
 SCHEMA += BUSINESS_SCHEMA
+SCHEMA += ACCOUNTING_SCHEMA
 MIGRATIONS += BUSINESS_MIGRATIONS
+MIGRATIONS += ["ALTER TABLE transactions ADD COLUMN ledger_ref TEXT NOT NULL DEFAULT ''"]
 
 @contextmanager
 def db():
@@ -202,9 +206,7 @@ def migrate_clock_gps_default(c):
 with db() as c:
     if SUPABASE_DATABASE_URL:
         schema = Path(APP_DIR, "..", "supabase", "schema.sql").read_text()
-        for statement in schema.split(";"):
-            if statement.strip():
-                c.execute(statement)
+        c.execute(schema)
     else:
         c.executescript(SCHEMA)
         for m in MIGRATIONS:                 # bancos criados em versões anteriores
@@ -277,6 +279,8 @@ PERMISSION_MODULES = {
 }
 
 def permission_delegable(role, module, permission):
+    if module == 'timekeeping':
+        return role == 'manager' and permission in {'view','edit'}
     if module == "tasks":
         return permission in ({"view", "approve"} if role == "manager" else {"view"})
     if module == "spaces":
@@ -289,6 +293,7 @@ def permission_delegable(role, module, permission):
         return permission == "view"
     return False
 DEFAULT_PERMISSIONS = {
+    ('manager','timekeeping','view'): True, ('manager','timekeeping','edit'): True,
     ("manager", "finance", "view"): True, ("manager", "finance", "create"): True,
     ("manager", "tasks", "view"): True, ("manager", "tasks", "approve"): True,
     ("manager", "approvals", "view"): True, ("manager", "approvals", "approve"): True,
@@ -299,6 +304,10 @@ DEFAULT_PERMISSIONS = {
 
 def request_permission(request):
     path, method = request.url.path, request.method
+    if path.startswith('/accounting'):
+        return 'finance','view' if method=='GET' else 'create'
+    if path.startswith('/time-entries/') and path.endswith('/adjustments'):
+        return 'timekeeping','edit'
     if path.startswith("/finance/dre"):
         return "finance", "view" if method == "GET" else "create"
     if path.startswith("/tasks"):
@@ -638,7 +647,7 @@ def employee_summary(who=Depends(employee_principal)):
         employee = c.execute("SELECT id,name,role,department_id FROM employees WHERE id=? AND active=1",
                              (who["employee_id"],)).fetchone()
         entries = rows(c.execute(
-            "SELECT kind,at FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
+            "SELECT kind,effective_at AS at FROM effective_time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
             "ORDER BY at,id", (who["employee_id"], start, end)))
         configured = settings(c)
     if not employee:
@@ -715,14 +724,14 @@ def employee_timesheet(month: Optional[str] = None, who=Depends(employee_princip
         employee = c.execute("SELECT name FROM employees WHERE id=? AND active=1",
                              (who["employee_id"],)).fetchone()
         entries = rows(c.execute(
-            "SELECT kind,at,nsr,hash FROM time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
+            "SELECT kind,at,nsr,hash,effective_at FROM effective_time_entries WHERE employee_id=? AND accepted=1 AND at>=? AND at<? "
             "ORDER BY at,id", (who["employee_id"], a, b)))
     if not employee:
         raise HTTPException(401, "Conta de funcionário inativa.")
     day_hours = defaultdict(float)
     opened = None
     for entry in entries:
-        stamp = datetime.fromisoformat(entry["at"])
+        stamp = datetime.fromisoformat(entry.get("effective_at",entry["at"]))
         if entry["kind"] == "entrada":
             opened = stamp
         elif opened:
@@ -1057,7 +1066,7 @@ def admin_operations(month: Optional[str] = None, who=Depends(admin_context)):
     for entry in entries:
         employee_id = entry["employee_id"]
         record = by_employee.setdefault(employee_id, {"days": defaultdict(float), "open": None})
-        stamp = datetime.fromisoformat(entry["at"])
+        stamp = datetime.fromisoformat(entry.get("effective_at",entry["at"]))
         if entry["kind"] == "entrada":
             record["open"] = stamp
             present_days.add((employee_id, local(stamp).date().isoformat()))
@@ -1355,8 +1364,8 @@ def send_message(b: MessageIn, who: dict = Depends(principal)):
 def timesheet_data(c, ym):
     a, b = month_bounds(ym)
     daily_hours = float(settings(c).get("daily_hours", DAILY_HOURS))
-    ents = rows(c.execute("SELECT employee_id,kind,at FROM time_entries WHERE accepted=1 AND at>=? AND at<? "
-                          "ORDER BY employee_id, at", (a, b)))
+    ents = rows(c.execute("SELECT employee_id,kind,effective_at AS at FROM effective_time_entries WHERE accepted=1 AND at>=? AND at<? "
+                          "ORDER BY employee_id, effective_at", (a, b)))
     out = {}
     for e in ents:
         t = datetime.fromisoformat(e["at"])
@@ -1471,9 +1480,9 @@ def sync_checklist_progress(c, task_id, actor, background):
 
 def task_cost(c, task_id):
     entries = rows(c.execute(
-        "SELECT employee_id,task_id,kind,at,COALESCE(labor_rate,salary/220.0) AS hourly_rate FROM time_entries "
-        "JOIN employees ON employees.id=time_entries.employee_id "
-        "WHERE accepted=1 ORDER BY time_entries.employee_id,time_entries.at,time_entries.id"))
+        "SELECT employee_id,task_id,kind,effective_at AS at,COALESCE(labor_rate,salary/220.0) AS hourly_rate FROM effective_time_entries "
+        "JOIN employees ON employees.id=effective_time_entries.employee_id "
+        "WHERE accepted=1 ORDER BY effective_time_entries.employee_id,effective_time_entries.effective_at,effective_time_entries.id"))
     openings, labor_hours, labor_cost = {}, 0.0, 0.0
     for entry in entries:
         key = entry["employee_id"]
@@ -1935,7 +1944,7 @@ class Tx(BaseModel):
     department_id: Optional[int] = None
 
 @app.post("/finance", dependencies=[Depends(admin)], status_code=201)
-def add_tx(t: Tx):
+def add_tx(t: Tx, who=Depends(admin_context)):
     try: date.fromisoformat(t.due)
     except ValueError: raise HTTPException(400, "Data de vencimento inválida.")
     if t.department_id is not None and t.kind != "pagar":
@@ -1954,6 +1963,7 @@ def add_tx(t: Tx):
         cur = c.execute("INSERT INTO transactions(kind,description,amount,due,department_id,category,competence) VALUES(?,?,?,?,?,?,?) RETURNING id",
                         (t.kind, t.description, hr.money(t.amount), t.due, t.department_id, "revenue" if t.kind == "receber" else t.category, t.competence or t.due[:7]))
         transaction_id = cur.fetchall()[0]["id"]
+        accounting.sync_transaction(sys.modules[__name__], c, c.execute('SELECT * FROM transactions WHERE id=?',(transaction_id,)).fetchone(),who['user'])
     return {"id": transaction_id}
 
 @app.get("/finance", dependencies=[Depends(admin)])
@@ -2011,6 +2021,7 @@ def remove_finance_transactions(ids, who):
         if any(t['paid'] or t['source_key'] for t in selected):
             raise HTTPException(409, 'A limpeza permite somente contas abertas manuais. Pagamentos históricos e contas da folha são preservados.')
         for transaction in selected:
+            accounting.cancel_transaction(sys.modules[__name__],c,transaction['id'],who['user'])
             c.execute('INSERT INTO audit_log(at,actor,role,action,resource,status,ip) VALUES(?,?,?,?,?,?,?)',
                       (iso(utcnow()), who['user'], who['role'], 'FINANCE_DELETE',
                        json.dumps({'id': transaction['id'], 'description': transaction['description'],
@@ -2138,8 +2149,8 @@ def get_department_costs(month: Optional[str] = None, year: Optional[int] = None
 
 # ---------- Matéria-prima ----------
 class MaterialIn(BaseModel):
-    name: str; unit: str = "un"; stock: float = Field(default=0, ge=0)
-    unit_cost: float = Field(default=0, ge=0); minimum_stock: float = Field(default=0, ge=0)
+    name: str; unit: str = "un"; stock: float = Field(default=0, ge=0, allow_inf_nan=False)
+    unit_cost: float = Field(default=0, ge=0, allow_inf_nan=False); minimum_stock: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 def with_mat(m):
     return {**m, "value": round(m["stock"] * m["unit_cost"], 2)}
@@ -2162,13 +2173,15 @@ def list_materials():
         return [with_mat(m) for m in rows(c.execute("SELECT * FROM materials ORDER BY name"))]
 
 @app.put("/materials/{mid}", dependencies=[Depends(admin)])
-def edit_material(mid: int, m: MaterialIn, background: BackgroundTasks):
+def edit_material(mid: int, m: MaterialIn, background: BackgroundTasks, who=Depends(admin_context)):
     with db() as c:
-        old = c.execute("SELECT stock,minimum_stock,name,unit FROM materials WHERE id=?", (mid,)).fetchone()
+        c.execute('BEGIN IMMEDIATE')
+        old = c.execute("SELECT * FROM materials WHERE id=?", (mid,)).fetchone()
         if not old:
             raise HTTPException(404, "Material não encontrado.")
         cur = c.execute("UPDATE materials SET name=?,unit=?,stock=?,unit_cost=?,minimum_stock=? WHERE id=?",
                         (m.name, m.unit, m.stock, m.unit_cost, m.minimum_stock, mid))
+        accounting.event(sys.modules[__name__],c,who,'materials',mid,dict(old),m.model_dump(),'Edição manual de material/custo')
     was_low = old["stock"] == 0 or (old["minimum_stock"] > 0 and old["stock"] <= old["minimum_stock"])
     is_low = m.stock == 0 or (m.minimum_stock > 0 and m.stock <= m.minimum_stock)
     if is_low and (not was_low or m.name != old["name"]):
@@ -2772,11 +2785,19 @@ def employee_clock(b: EmployeeClock, request: Request, background: BackgroundTas
     return record_clock(clock_input, request, background, employee_id=who["employee_id"])
 
 @app.get("/time-entries", dependencies=[Depends(admin)])
-def time_entries(employee_id: Optional[int] = None, limit: int = 100):
-    q, a = "SELECT t.*, e.name FROM time_entries t JOIN employees e ON e.id=t.employee_id", []
-    if employee_id: q += " WHERE employee_id=?"; a.append(employee_id)
+def time_entries(employee_id: Optional[int] = None, limit: int = Query(100,ge=1,le=500),
+                 page: int = Query(1,ge=1), page_size: int = Query(30,ge=1,le=100),
+                 paginated: bool = False, month: Optional[str] = None):
+    q, a,clauses = " FROM effective_time_entries t JOIN employees e ON e.id=t.employee_id", [],[]
+    if employee_id: clauses.append('t.employee_id=?');a.append(employee_id)
+    if month:
+        start,end=month_bounds(month);clauses.append('t.at>=? AND t.at<?');a.extend((start,end))
+    if clauses:q+=' WHERE '+' AND '.join(clauses)
     with db() as c:
-        return rows(c.execute(q + " ORDER BY t.id DESC LIMIT ?", (*a, limit)))
+        items=rows(c.execute('SELECT t.*,e.name'+q+" ORDER BY t.id DESC LIMIT ? OFFSET ?", (*a,page_size if paginated else limit,(page-1)*page_size if paginated else 0)))
+        if not paginated:return items
+        total=c.execute('SELECT COUNT(*)'+q,a).fetchone()[0]
+    return {'items':items,'total':total,'page':page,'page_size':page_size}
 
 @app.get("/time-entries/verify", dependencies=[Depends(admin)])
 def verify_entries():
@@ -2915,6 +2936,7 @@ def dashboard():
             "setup_completed": setup_completed, "dre": dre, "lots": lots}
 
 business.register_routes(sys.modules[__name__])
+accounting.register_routes(sys.modules[__name__])
 
 # ---------- Front end (mesmo domínio da API) ----------
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")

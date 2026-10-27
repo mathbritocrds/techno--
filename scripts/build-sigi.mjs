@@ -1,6 +1,8 @@
+import { build } from 'esbuild';
 import { cpSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Script } from 'node:vm';
+await build({entryPoints:['app/ui/accounting.jsx'],bundle:true,minify:true,format:'iife',globalName:'SIGIAccounting',outfile:'app/static/accounting.bundle.js',define:{'process.env.NODE_ENV':'\"production\"'},target:'es2020'});
 const result = spawnSync('python', ['-m', 'compileall', '-q', 'app'], { stdio: 'inherit' });
 if (result.status !== 0) process.exit(result.status ?? 1);
 for (const [index, script] of [...readFileSync('app/static/index.html','utf8').matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].entries()) new Script(script[1], { filename: `index-inline-${index}.js` });

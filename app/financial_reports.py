@@ -72,7 +72,9 @@ def report(m, start, end, who, department_id=None, category=None):
     for e in entries:
         e.update(department=names.get(e['department_id'],'Sem setor'),revenue_pct=pct(hr.D(e['amount']),revenue_base),expense_pct=pct(hr.D(e['amount']),expenses) if e['category']!='revenue' else None)
     gross=totals['revenue']-totals['tax']-totals['cost']; net=totals['revenue']-expenses
-    return dict(start=start,end=end,**{k:hr.money(v) for k,v in totals.items()},gross_profit=hr.money(gross),net_profit=hr.money(net),net_margin_pct=pct(net,revenue_base),percentages={k:pct(v,revenue_base) for k,v in totals.items()},breakdown=breakdown,entries=sorted(entries,key=lambda e:(e['month'],e['department'],e['category'],e['reference'])),departments=[d for d in departments if who['role']=='admin' or d['id']==department_id],closed_payroll_months=[r['month'] for r in runs],basis='competence',note='Pessoal inclui folhas fechadas e despesas avulsas. Importações são lançamentos contábeis, sem gerar pagamentos. Percentuais usam a receita do período; sem receita, ficam indisponíveis.')
+    from app.accounting import statement,cents
+    cpc51=statement({'revenue':cents(totals['revenue']),'deductions':-cents(totals['tax']),'cost':-cents(totals['cost']),'operating':-cents(totals['operating']+totals['personnel']),'financing':-cents(totals['financial'])})
+    return dict(start=start,end=end,cpc51=cpc51,**{k:hr.money(v) for k,v in totals.items()},gross_profit=hr.money(gross),net_profit=hr.money(net),net_margin_pct=pct(net,revenue_base),percentages={k:pct(v,revenue_base) for k,v in totals.items()},breakdown=breakdown,entries=sorted(entries,key=lambda e:(e['month'],e['department'],e['category'],e['reference'])),departments=[d for d in departments if who['role']=='admin' or d['id']==department_id],closed_payroll_months=[r['month'] for r in runs],basis='competence',note='Pessoal inclui folhas fechadas e despesas avulsas. Importações são lançamentos contábeis, sem gerar pagamentos. Percentuais usam a receita do período; sem receita, ficam indisponíveis.')
 
 
 def parse_csv(m, payload, who, c):
@@ -136,6 +138,16 @@ def parse_csv(m, payload, who, c):
 
 
 def register_routes(m):
+    @m.app.get('/finance/dre/statement.csv', dependencies=[Depends(m.manager_or_admin)])
+    def statement_csv(start:str,end:str,department_id:int|None=None,who=Depends(m.principal)):
+        result=report(m,start,end,who,department_id)
+        out=io.StringIO();out.write('\ufeff');writer=csv.writer(out,delimiter=';')
+        writer.writerow(['DRE CPC 51 — origens operacionais',start,end])
+        writer.writerow(['Rubrica','Valor','% receita bruta','Obrigatório'])
+        for row in result['cpc51']:
+            writer.writerow([m.csv_safe(row['label']),f"{row['amount']:.2f}".replace('.',','),(f"{row['revenue_pct']:.2f}".replace('.',',')+'%') if row['revenue_pct'] is not None else '', 'Sim' if row['required'] else ''])
+        return Response(out.getvalue(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="dre-cpc51-{start}-{end}.csv"','Cache-Control':'private, no-store'})
+
     @m.app.get('/finance/dre', dependencies=[Depends(m.manager_or_admin)])
     def dre(start:str,end:str,department_id:int|None=None,category:str|None=None,who=Depends(m.principal)):
         return report(m,start,end,who,department_id,category)
