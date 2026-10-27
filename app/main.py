@@ -32,7 +32,7 @@ os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")                    # opcional: acesso direto via API (vazio = desligado)
 SESSION_HOURS = 12
 TZ_OFFSET = float(os.getenv("TZ_OFFSET_HOURS", "-3"))         # fuso da empresa (Brasília = -3)
-MAX_GPS_ERROR_M = 50      # GPS impreciso demais é recusado
+MAX_GPS_ERROR_M = 150     # tolerância padrão da precisão; o raio da sede permanece separado
 MAX_SPREAD_M = 100        # amostras muito dispersas = sinal instável
 MAX_SPEED_MS = 55         # ~200 km/h: acima disso, deslocamento impossível
 MAX_PIN_TRIES = 5
@@ -185,6 +185,20 @@ def db():
     finally:
         con.close()
 
+def migrate_clock_gps_default(c):
+    if c.execute("SELECT 1 FROM settings WHERE k='clock_gps_default_version'").fetchone():
+        return
+    previous = c.execute("SELECT v FROM settings WHERE k='clock_gps_accuracy_m'").fetchone()
+    if previous:
+        try:
+            legacy_default = float(previous['v']) == 50
+        except (TypeError, ValueError):
+            legacy_default = False
+        if legacy_default:
+            c.execute("UPDATE settings SET v=? WHERE k='clock_gps_accuracy_m'", (str(MAX_GPS_ERROR_M),))
+    c.execute("INSERT INTO settings(k,v) VALUES('clock_gps_default_version','2') ON CONFLICT(k) DO NOTHING")
+
+
 with db() as c:
     if SUPABASE_DATABASE_URL:
         schema = Path(APP_DIR, "..", "supabase", "schema.sql").read_text()
@@ -201,6 +215,8 @@ with db() as c:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_username ON admins(lower(username)) WHERE username != ''")
 
 with db() as c:
+    c.execute('BEGIN IMMEDIATE')
+    migrate_clock_gps_default(c)
     c.execute("UPDATE departments SET lead_employee_id=(SELECT MIN(e.id) FROM employees e WHERE e.active=1 AND lower(e.name)=lower(departments.lead) AND (e.department_id IS NULL OR e.department_id=departments.id)) WHERE lead_employee_id IS NULL AND lead<>'' AND (SELECT COUNT(*) FROM employees e WHERE e.active=1 AND lower(e.name)=lower(departments.lead))=1 AND (SELECT COUNT(*) FROM departments d WHERE lower(d.lead)=lower(departments.lead))=1")
     c.execute("UPDATE employees SET department_id=(SELECT MIN(d.id) FROM departments d WHERE d.lead_employee_id=employees.id) WHERE department_id IS NULL AND EXISTS(SELECT 1 FROM departments d WHERE d.lead_employee_id=employees.id)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_transaction_source ON transactions(source_key) WHERE source_key<>''")
@@ -649,6 +665,7 @@ def employee_summary(who=Depends(employee_principal)):
         "bank_minutes": round(total / 60) - round(daily_target * 60),
         "break_alert": bool(open_entry and shift_seconds >= alert_minutes * 60),
         "break_alert_minutes": alert_minutes,
+        "clock_gps_accuracy_m": float(configured.get('clock_gps_accuracy_m', MAX_GPS_ERROR_M)),
         "last_entry": entries[-1]["at"] if entries else None,
     }
 
@@ -995,7 +1012,7 @@ def global_operational_settings():
     }
 
 class OperationalSettings(BaseModel):
-    clock_gps_accuracy_m: float = Field(ge=5, le=100)
+    clock_gps_accuracy_m: float = Field(ge=5, le=500, allow_inf_nan=False)
     clock_max_spread_m: float = Field(ge=10, le=250)
     clock_break_alert_minutes: int = Field(ge=60, le=600)
     daily_hours: float = Field(gt=0, le=16)
@@ -2596,7 +2613,7 @@ def check_employee(c, employee_id: int, pin: str):
 class Live(BaseModel):
     employee_id: int; pin: str
     lat: float = Field(ge=-90, le=90); lng: float = Field(ge=-180, le=180)
-    accuracy_m: float = Field(default=0, ge=0)
+    accuracy_m: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 def verify_clock_ip(client_host, settings_row):
     try:
@@ -2607,6 +2624,15 @@ def verify_clock_ip(client_host, settings_row):
                 raise HTTPException(403, "Este ponto só pode ser registrado pela rede autorizada.")
     except (ValueError, json.JSONDecodeError) as error:
         raise HTTPException(403, "Não foi possível validar o IP da rede autorizada.") from error
+
+@app.get('/clock/policy')
+def clock_policy(request: Request):
+    with db() as c:
+        configured = settings(c)
+        verify_clock_ip(request.client.host if request.client else '', configured)
+    return {'accuracy_limit_m': float(configured.get('clock_gps_accuracy_m', MAX_GPS_ERROR_M)),
+            'location_max_age_ms': 120_000}
+
 
 @app.post("/clock/live")
 def clock_live(b: Live, request: Request):
@@ -2622,7 +2648,7 @@ def clock_live(b: Live, request: Request):
     gps_limit = float(configured.get("clock_gps_accuracy_m", MAX_GPS_ERROR_M))
     gps_ok = b.accuracy_m <= gps_limit
     return {"distance_m": round(d), "radius_m": round(w["radius_m"]), "accuracy_m": round(b.accuracy_m),
-            "gps_ok": gps_ok, "inside": gps_ok and d <= w["radius_m"]}
+            'accuracy_limit_m': gps_limit, "gps_ok": gps_ok, "inside": gps_ok and d <= w["radius_m"]}
 
 class Sample(BaseModel):
     lat: float = Field(ge=-90, le=90); lng: float = Field(ge=-180, le=180)
@@ -2675,7 +2701,7 @@ def record_clock(b: Clock, request: Request, background: BackgroundTasks,
         if any(x.ts_ms and abs(now_ms - x.ts_ms) > 120_000 for x in b.samples):
             reason = "A hora do aparelho parece incorreta ou a localização é antiga. Ajuste o relógio e tente de novo."
         elif best.accuracy_m > gps_accuracy_limit:
-            reason = f"Sinal de GPS fraco (±{best.accuracy_m:.0f} m). Vá para um local aberto."
+            reason = f"Precisão da localização ±{best.accuracy_m:.0f} m; limite permitido ±{gps_accuracy_limit:.0f} m. Ative a localização e o Wi-Fi ou tente perto de uma janela."
         elif spread > spread_limit:
             reason = "Localização instável. Fique parado em local aberto e tente de novo."
         elif dist > w["radius_m"]:

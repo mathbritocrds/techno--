@@ -26,6 +26,62 @@ def service(tmp_path, monkeypatch):
     return client, {'Authorization':'Bearer '+token}
 
 
+@pytest.mark.parametrize('mode', ['pin', 'account'])
+@pytest.mark.parametrize('accuracy, status', [(120, 200), (150, 200), (151, 403)])
+def test_clock_accepts_reduced_precision_with_same_boundary(service, mode, accuracy, status):
+    client, auth = service
+    eid = employee(service)
+    client.put('/settings/workplace', json={'lat': -23.55, 'lng': -46.63, 'radius_m': 100}, headers=auth)
+    assert client.get('/clock/policy').json()['accuracy_limit_m'] == 150
+    sample = {'lat': -23.55, 'lng': -46.63, 'accuracy_m': accuracy,
+              'ts_ms': main.utcnow().timestamp()*1000}
+    live = client.post('/clock/live', json={'employee_id': eid, 'pin': '1234', **{k: v for k, v in sample.items() if k != 'ts_ms'}}).json()
+    assert live['inside'] == (status == 200) and live['accuracy_limit_m'] == 150
+    if mode == 'account':
+        client.post(f'/employees/{eid}/account', json={'email':'gps@test.com','password':'gps-test-password'}, headers=auth)
+        token = client.post('/auth/employee/login', json={'email':'gps@test.com','password':'gps-test-password'}).json()['token']
+        worker = {'Authorization': 'Bearer '+token}
+        assert client.get('/employee/summary', headers=worker).json()['clock_gps_accuracy_m'] == 150
+        result = client.post('/employee/clock', json={'consent':True,'samples':[sample]}, headers=worker)
+    else:
+        result = client.post('/clock', json={'employee_id':eid,'pin':'1234','consent':True,'samples':[sample]})
+    assert result.status_code == status
+    if status == 200:
+        assert result.json()['nsr'] == 1 and len(result.json()['hash']) == 64
+
+
+def test_clock_precision_tolerance_keeps_distance_age_consent_and_custom_policy(service):
+    client, auth = service
+    eid = employee(service)
+    client.put('/settings/workplace', json={'lat': 0, 'lng': 0, 'radius_m': 100}, headers=auth)
+    payload = {'employee_id':eid, 'pin':'1234', 'consent':True,
+               'samples':[{'lat':0,'lng':0,'accuracy_m':120}]}
+    assert client.post('/clock', json={**payload,'consent':False}).status_code == 400
+    far = {**payload, 'samples':[{'lat':.01,'lng':0,'accuracy_m':120}]}
+    assert client.post('/clock', json=far).status_code == 403
+    stale = {**payload, 'samples':[{'lat':0,'lng':0,'accuracy_m':120,'ts_ms':(main.utcnow().timestamp()-180)*1000}]}
+    assert client.post('/clock', json=stale).status_code == 403
+    config = client.get('/admin/operational-settings', headers=auth).json()
+    assert client.put('/admin/operational-settings', json={**config,'clock_gps_accuracy_m':300}, headers=auth).status_code == 200
+    assert client.get('/clock/policy').json()['accuracy_limit_m'] == 300
+    assert client.put('/admin/operational-settings', json={**config,'clock_gps_accuracy_m':501}, headers=auth).status_code == 422
+    client.put('/admin/operational-settings', json={**config,'clock_gps_accuracy_m':40}, headers=auth)
+    assert client.post('/clock', json=payload).status_code == 403
+    with main.db() as c:
+        assert c.execute('SELECT COUNT(*) FROM time_entries WHERE accepted=1').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('previous, expected', [('50',150),('50.0',150),('30',30),('100',100)])
+def test_clock_default_migration_is_once_and_preserves_custom_values(service, previous, expected):
+    with main.db() as c:
+        c.execute("INSERT INTO settings(k,v) VALUES('clock_gps_accuracy_m',?)", (previous,))
+        main.migrate_clock_gps_default(c)
+        assert float(c.execute("SELECT v FROM settings WHERE k='clock_gps_accuracy_m'").fetchone()['v']) == expected
+        c.execute("UPDATE settings SET v='50' WHERE k='clock_gps_accuracy_m'")
+        main.migrate_clock_gps_default(c)
+        assert c.execute("SELECT v FROM settings WHERE k='clock_gps_accuracy_m'").fetchone()['v'] == '50'
+
+
 def test_finance_period_filters_summary_accounts_costs_and_csv(service):
     client, auth = service
     for due, amount, kind in [('2025-10-10', 90, 'receber'), ('2026-09-10', 100, 'receber'),
