@@ -191,7 +191,7 @@ main.leave{animation:leave .21s ease-in forwards}
 :root[data-motion=reduced] *, :root[data-motion=reduced] *::before, :root[data-motion=reduced] *::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 @media print{.orbs,nav,#toast,.noprint,.seg,.task-modal-overlay,.search-overlay{display:none!important}body{background:#fff;color:#000}#root{max-width:none;padding:0}.card{background:#fff;box-shadow:none;border:1px solid #ccc;backdrop-filter:none}.task{break-inside:avoid}}
 .salary-compact,#es{max-width:115px;min-width:80px!important;padding:6px 8px!important;margin:0!important}.salary-row{margin:4px 0!important;padding:0!important}.business-field{flex:1 1 180px;min-width:0}.business-field input,.business-field select{width:100%;box-sizing:border-box}.card details summary{cursor:pointer;font-weight:600}.card label input[type=file]{max-width:220px}
-</style><link rel="stylesheet" href="/enhancements.css"><link rel="stylesheet" href="/accounting.css">
+</style><link rel="stylesheet" href="/enhancements.css"><link rel="stylesheet" href="/accounting.css"><link rel="stylesheet" href="/density.css">
 </head><body>
 <div class="orbs" aria-hidden="true"><i></i><i></i><i></i></div>
 <div id="root"><div class="boot-screen" role="status" aria-label="Carregando SIGI"><div class="boot-content card"><div class="logo"><img class="site-logo" src="/icon.svg?v=logo-transparente-20261027" width="52" height="52" alt="SIGI — Engenharia e Gestão Industrial" decoding="async"><span class="logo-wordmark" aria-hidden="true">SIGI</span></div><div class="sk" aria-hidden="true"></div><div class="sk" aria-hidden="true"></div><div class="sk" aria-hidden="true"></div><p class="boot-label">Preparando seu espaço de trabalho…</p></div></div></div><div id="toast" role="status" aria-live="polite"></div>
@@ -726,4 +726,4 @@ async function removeChannel(id){await api('/notification-channels/'+id,'DELETE'
 async function sendTestNotification(){const result=await api('/notifications/test','POST',{message:'Este é um aviso de teste do SIGI.'});toast(`Teste enviado para ${result.sent} canal(is).`,'ok')}
 
 </script><script src="/business.js"></script>
-<script src="/enhancements.js"></script><script>tela();</script></body></html>
+<script src="/enhancements.js"></script><script src="/density.js"></script><script>tela();</script></body></html>

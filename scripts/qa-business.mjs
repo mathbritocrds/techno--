@@ -60,7 +60,7 @@ try {
         assert.equal(await page.locator('[data-setup]').count(),0);
         await page.waitForFunction(()=>document.querySelector('[data-task-chart] .cnt')?.textContent==='33%');
         await page.screenshot({path:`${output}/sigi-${name}-painel-${viewport}.png`,fullPage:true});
-        const navigate=async(group,tab)=>{if(await page.locator(`[data-sector="${group}"]`).getAttribute('aria-expanded')!=='true')await page.locator(`[data-sector="${group}"]`).click();await page.locator(`#submenuItems [data-t="${tab}"]`).click();};
+        const navigate=async(group,tab)=>{if(await page.locator(`[data-sector="${group}"]`).getAttribute('aria-expanded')!=='true')await page.locator(`[data-sector="${group}"]`).click();await page.locator(`#submenuItems [data-t="${tab}"]`).click();const module={financeiro:'finance',folha:'hr',ponto:'time',seguranca:'security'}[tab];if(module){const section=page.locator(`[data-density-module="${module}"]`);await section.waitFor();await section.locator('[data-density-view="all"]').click();}};
         await page.locator('[data-sector="rh"]').click();assert.equal(await page.locator('[data-sector="rh"]').getAttribute('aria-expanded'),'true');await page.locator('[data-sector="rh"]').click();assert.equal(await page.locator('[data-sector="rh"]').getAttribute('aria-expanded'),'false');
         await navigate('rh','folha');
         await page.getByRole('heading',{name:'Funcionários e folha',exact:true}).waitFor();
