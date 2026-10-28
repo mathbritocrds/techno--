@@ -2,6 +2,16 @@
 
 A atualização acrescenta `density.css` e `density.js` ao frontend servido pelo FastAPI. O backend, o banco, as rotas e a configuração do Render permanecem iguais. As funções e os scripts anteriores não foram substituídos. IDs, classes, eventos e nós dos formulários existentes são preservados.
 
+## Funcionários em linhas expansíveis
+
+A lista de funcionários usa uma linha por pessoa, mostrando inicialmente apenas as iniciais, o nome e o cargo. O elemento nativo `details` permite expandir a linha com clique, Enter ou Espaço. Uma pessoa fica aberta por vez. Os dados de departamento, pagamento, custos e benefícios e todas as ações anteriores permanecem no conteúdo expandido. A pessoa selecionada continua aberta depois de salvar uma edição ou bonificação.
+
+Na seção Equipe e pagamentos, a lista e sua busca são priorizadas. Totais mensais/anuais, gráficos e tabelas de referência ficam em Custos e gráficos; Tudo continua disponível. Os campos e as regras de cálculo não mudam.
+
+## Leitura das páginas internas
+
+As páginas internas recebem o atributo `data-density-simple`, que ajusta a hierarquia dos títulos, a leitura de tabelas e campos e a organização dos botões de ação. Os controles usam cantos menos arredondados e os botões de uma linha ocupam somente o espaço necessário. A paleta, os temas e os indicadores existentes são mantidos. Essa camada não é aplicada ao painel principal.
+
 O CSS reduz espaços, alturas de controles e linhas de tabelas em computadores com ponteiro preciso. No celular e em telas sensíveis ao toque, os controles mantêm alvos de 44 px. Formulários existentes em grid passam a distribuir mais campos por linha. Campos sequenciais de rótulo/controle recebem posições de grid sem mover os elementos.
 
 Nenhuma cor original é redefinida. As superfícies, textos, botões, destaques e temas continuam usando as definições anteriores. Os novos controles usam somente as variáveis de cor já existentes.
