@@ -79,6 +79,33 @@
 [data-density-filtered],[data-density-page-inactive]{display:none!important}
 .density-empty[hidden],.density-filter-note[hidden],.density-pager[hidden]{display:none}
 
+/* Internal pages have a clearer hierarchy; the dashboard keeps its existing layout. */
+.app main[data-density-simple] .card{border-radius:12px}
+.app main[data-density-simple] .card h3{font-size:14px;font-weight:600}
+.app main[data-density-simple] .sub{line-height:1.5}
+.app main[data-density-simple] .chip{border-radius:8px;font-size:13px}
+.app main[data-density-simple] .row>.btn,.app main[data-density-simple] .row>.chip{flex:0 0 auto;align-self:flex-end}
+.app main[data-density-simple] .row>label.chip{display:inline-flex;align-items:center;justify-content:center}
+.app main[data-density-simple] table th,.app main[data-density-simple] table td{font-size:13px}
+.app main[data-density-simple] .employee-grid{grid-template-columns:minmax(0,1fr);gap:6px}
+.app main[data-density-simple] .employee-card{padding:0}
+.employee-record{margin:0}
+.employee-record>.employee-row{display:grid;grid-template-columns:36px minmax(0,1fr) minmax(140px,.6fr) 12px;align-items:center;gap:12px;padding:10px 14px;min-height:58px;list-style:none;cursor:pointer;margin:0}
+.employee-row::-webkit-details-marker{display:none}
+.employee-row::marker{content:''}
+.employee-row .employee-avatar{width:36px;height:36px;border-radius:10px;font-size:13px}
+.employee-name{font-size:15px;font-weight:500;overflow-wrap:anywhere;line-height:1.4}
+.employee-role{font-size:13px;color:var(--mute);overflow-wrap:anywhere;line-height:1.4}
+.employee-chevron{width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);color:var(--mute);transition:transform .18s var(--ease)}
+.employee-record[open]>.employee-row .employee-chevron{transform:rotate(225deg)}
+.employee-row:hover .employee-name{text-decoration:underline;text-underline-offset:3px}
+.employee-row:focus-visible{outline:2px solid var(--b);outline-offset:2px;border-radius:10px}
+.employee-body{padding:12px 14px;border-top:1px solid var(--line)}
+.employee-body .employee-department{font-size:13px;margin:0 0 8px}
+.employee-body .employee-pay{max-width:560px}
+.app main .employee-body .employee-totals{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0}
+.employee-body .employee-details dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}
+
 @media(min-width:721px) and (pointer:fine){
  .app main :is(input,select,textarea),.task-dialog :is(input,select),.acct-dialog :is(input,select){min-height:30px;padding:5px 8px;font-size:13px}
  .app main :is(.btn,.chip),.task-dialog :is(.btn,.chip),.acct-dialog :is(.btn,.chip){min-height:30px;padding:5px 11px;font-size:12px}
@@ -93,6 +120,9 @@
  .app main .acct-table th,.app main .acct-table td{padding:4px 8px}
  .app main .acct-required .tag{margin:2px 6px}
  .app main .density-table-tools :is(input,select,button){min-height:30px}
+ .app main[data-density-simple] :is(input,select):not([type=checkbox]):not([type=radio]):not([type=file]){min-height:34px;font-size:14px}
+ .app main[data-density-simple] table :is(input,select):not([type=checkbox]):not([type=radio]):not([type=file]){min-height:32px;font-size:13px}
+ .app main[data-density-simple] .row>label.chip{min-height:30px}
 }
 @media(max-width:720px),(pointer:coarse){
  .app main :is(.btn,.chip,input,select),.density-view-nav .chip,.density-table-tools :is(input,select,button){min-height:44px}
@@ -112,6 +142,13 @@
  .app main .row>input,.app main .row>select{flex-basis:145px}
  .app main .form-grid,.task-dialog .form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
  .app main .form-grid input,.app main .form-grid select,.task-dialog .form-grid input,.task-dialog .form-grid select{font-size:16px}
+ .employee-record>.employee-row{grid-template-columns:32px minmax(0,1fr) 12px;gap:2px 10px;padding:10px 12px;min-height:62px}
+ .employee-row .employee-avatar{grid-column:1;grid-row:1/3;width:32px;height:32px}
+ .employee-row .employee-name{grid-column:2;grid-row:1}
+ .employee-row .employee-role{grid-column:2;grid-row:2;font-size:12px}
+ .employee-row .employee-chevron{grid-column:3;grid-row:1/3}
+ .app main .employee-body .employee-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .employee-body .employee-details dl{grid-template-columns:minmax(0,1fr)}
 }
 @media(max-width:380px){
  .app main .form-grid,.task-dialog .form-grid,.density-flat-grid{grid-template-columns:1fr}

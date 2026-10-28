@@ -58,7 +58,7 @@
     } else if (main.querySelector('.payroll-toolbar')) {
       module = 'hr';
       definitions = [['team', 'Equipe e pagamentos'], ['charts', 'Custos e gráficos']];
-      assignments = children.filter(n => n.matches('.employee-filter,.employee-grid,#hrNoResults,.hr-overview')).map(n => [n, n.matches('.hr-overview') ? 'charts' : 'team']);
+      assignments = children.filter(n => n.matches('.employee-filter,.employee-grid,#hrNoResults,.hr-overview,.payroll-kpis') || /^Composição anual|^Tabela INSS/.test(n.querySelector('summary')?.textContent || '')).map(n => [n, n.matches('.employee-filter,.employee-grid,#hrNoResults') ? 'team' : 'charts']);
     } else if (main.querySelector('#rr') && main.querySelector('#cn')) {
       module = 'time';
       definitions = [['work', 'Jornada e registros'], ['settings', 'Local e empresa']];
@@ -230,6 +230,7 @@
     try {
       const main = document.querySelector('#main');
       if (main) {
+        main.toggleAttribute('data-density-simple', !main.querySelector('.overview-kpis'));
         dailySummary(main);
         logicalSections(main);
         main.querySelectorAll('table').forEach(searchTable);
