@@ -6,7 +6,7 @@ await build({entryPoints:['app/ui/accounting.jsx'],bundle:true,minify:true,forma
 const result = spawnSync('python', ['-m', 'compileall', '-q', 'app'], { stdio: 'inherit' });
 if (result.status !== 0) process.exit(result.status ?? 1);
 for (const [index, script] of [...readFileSync('app/static/index.html','utf8').matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].entries()) new Script(script[1], { filename: `index-inline-${index}.js` });
-for(const name of ['business','enhancements'])new Script(readFileSync(`app/static/${name}.js`,'utf8'), { filename: `${name}.js` });
+for(const name of ['business','enhancements','density'])new Script(readFileSync(`app/static/${name}.js`,'utf8'), { filename: `${name}.js` });
 rmSync('dist/sigi', { recursive: true, force: true });
 mkdirSync('dist/sigi', { recursive: true });
 cpSync('app','dist/sigi/app',{recursive:true,filter:source=>!source.includes('__pycache__')});

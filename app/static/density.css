@@ -1,0 +1,124 @@
+/* Operational density only. Existing paint, theme tokens and brand colors stay intact. */
+.app{--density-gap:8px;--density-panel:12px}
+.app main h1{font-size:26px;margin:12px 0 4px}
+.app main h2{font-size:20px}
+.app main .sub{margin-bottom:10px;line-height:1.4}
+.app main .card{padding:var(--density-panel)}
+.app main .card h3{margin-bottom:6px}
+.app main .grid,.app main .dash-charts{gap:var(--density-gap)}
+.app main .row{gap:6px;margin-top:8px;margin-bottom:8px}
+.app main .section-heading{gap:12px;margin-bottom:12px}
+.app main .overview-section{margin:14px 0 8px}
+.app main .overview-kpis,.app main .payroll-kpis{gap:8px;margin-top:10px}
+.app main .overview-kpis .card,.app main .payroll-kpis .card,.app main [data-finance-summary] .card{padding:10px 12px}
+.app main .overview-kpis .big,.app main .payroll-kpis .big,.app main [data-finance-summary] .big{font-size:23px;line-height:1.2}
+.app main .overview-kpis .d,.app main .payroll-kpis .d,.app main [data-finance-summary] .d{margin-top:4px;font-size:11px}
+.app main .more-charts,.app main .overview-operations{margin-top:10px}
+.app main .gauge{max-width:140px}
+.app main .task-stage-legend{gap:6px 12px;margin:8px 0}
+.app main .onboarding-card{margin-bottom:10px}
+.app main .onboarding-card .steps{gap:6px}
+.app main .overview-updated{margin-top:12px}
+.app main .employee-filter{margin:12px 0 8px}
+.app main .employee-grid{gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr))}
+.app main .employee-card{padding:12px}
+.app main .employee-identity{gap:8px}
+.app main .employee-identity h2{font-size:18px}
+.app main .employee-pay{padding:10px 0;gap:8px}
+.app main .employee-totals{gap:10px 8px;margin:12px 0}
+.app main .employee-totals dd{font-size:16px;margin-top:3px}
+.app main .employee-details{margin-top:10px;padding-top:8px}
+.app main .hr-overview{margin-top:12px}
+.app main .hr-chart-heading{margin-bottom:8px}
+.app main .hr-chart-total{margin:10px 0;font-size:23px}
+.app main .hr-cost-part{padding:7px 0;gap:8px}
+.app main .finance-toolbar{margin-bottom:10px}
+.app main .finance-toolbar .sub{margin-top:6px;margin-bottom:0}
+.app main .cost-chart,.app main .dash-bars{gap:8px;margin-top:8px}
+.app main .cost-row{gap:8px}
+.app main .acct-tabs{gap:6px;margin:10px 0}
+.app main .acct-filters,.app main .acct-report,.app main .acct-integration,.app main .acct-adjustment{margin-top:10px}
+.app main .acct-kpis .big{font-size:23px;margin:6px 0}
+.app main .acct-report-heading{margin-bottom:8px}
+.app main .acct-balance{margin-top:10px}
+.app main .acct-balance h4{margin:12px 0 6px}
+.app main .acct-balance-row{padding:6px 8px;gap:10px}
+.app main .acct-pager{margin-top:10px}
+.app main .form-grid,.task-dialog .form-grid{gap:8px;margin:10px 0;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}
+.app main .form-grid>label,.task-dialog .form-grid>label{gap:4px}
+.app main .grid.g2:has(>div>label){grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+.app main .row>input,.app main .row>select{flex-basis:140px;min-width:0}
+.app main .row>label:has(>input),.app main .row>label:has(>select){min-width:130px}
+.density-flat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;align-items:start}
+.density-flat-grid>*{grid-column:1/-1;min-width:0}
+.density-flat-grid>.density-field-label{grid-column:var(--density-column);grid-row:var(--density-label-row);margin:4px 0 0}
+.density-flat-grid>.density-field-control{grid-column:var(--density-column);grid-row:var(--density-control-row);width:100%;margin:0;min-width:0}
+
+/* New controls use exactly the existing theme colors. */
+.density-day-strip{margin:0 0 10px}
+.density-day-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:12px;color:var(--mute)}
+.density-day-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.app main .density-day-cards .card{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;min-width:0}
+.density-day-cards span{font-size:12px;color:var(--mute)}
+.density-day-cards strong{font-size:22px;line-height:1.1;font-weight:500;font-variant-numeric:tabular-nums;color:var(--ink)}
+.density-view-nav{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;overflow:visible;padding:0}
+.density-view-nav .chip{font-size:12px}
+.density-view-nav .chip[aria-pressed=true]{background:var(--g);border-color:var(--g);color:var(--bg)}
+[data-density-panel][data-density-inactive]{display:none!important}
+.density-table-tools{display:flex;align-items:end;flex-wrap:wrap;gap:6px;margin:8px 0;min-width:0}
+.density-table-tools label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mute);margin:0;min-width:0}
+.density-table-tools .density-search{flex:1 1 180px;max-width:360px}
+.density-table-tools .density-column{flex:0 1 180px}
+.density-table-tools input,.density-table-tools select{width:100%;min-width:0;margin:0}
+.density-table-count{font-size:11px;color:var(--mute);margin:0 0 5px}
+.density-filter-note{font-size:11px;color:var(--mute);margin:0 0 6px}
+.density-empty{font-size:12px;color:var(--mute);padding:8px 0;margin:0}
+.density-pager{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;margin-top:8px;font-size:11px;color:var(--mute)}
+.density-pager label{display:flex;align-items:center;gap:6px;margin:0;font-size:11px}
+.density-pager select{width:auto;min-width:75px}
+[data-density-filtered],[data-density-page-inactive]{display:none!important}
+.density-empty[hidden],.density-filter-note[hidden],.density-pager[hidden]{display:none}
+
+@media(min-width:721px) and (pointer:fine){
+ .app main :is(input,select,textarea),.task-dialog :is(input,select),.acct-dialog :is(input,select){min-height:30px;padding:5px 8px;font-size:13px}
+ .app main :is(.btn,.chip),.task-dialog :is(.btn,.chip),.acct-dialog :is(.btn,.chip){min-height:30px;padding:5px 11px;font-size:12px}
+ .app main textarea{min-height:64px}
+ .app main input[type=checkbox],.task-dialog input[type=checkbox],.acct-dialog input[type=checkbox]{min-height:16px;padding:0}
+ .app main table td,.app main table th{padding:1px 8px;font-size:12px;line-height:1.25}
+ .app main table th{padding-top:4px;padding-bottom:4px}
+ .app main table :is(.btn,.chip,input,select){min-height:28px;padding:3px 7px;font-size:12px}
+ .app main table input[type=checkbox]{min-height:16px;padding:0}
+ .app main .finance-select-target{width:28px;height:28px}
+ .app main .finance-check{height:16px;min-height:16px;width:16px}
+ .app main .acct-table th,.app main .acct-table td{padding:4px 8px}
+ .app main .acct-required .tag{margin:2px 6px}
+ .app main .density-table-tools :is(input,select,button){min-height:30px}
+}
+@media(max-width:720px),(pointer:coarse){
+ .app main :is(.btn,.chip,input,select),.density-view-nav .chip,.density-table-tools :is(input,select,button){min-height:44px}
+ .app main input[type=checkbox]{min-height:16px}
+ .app main .finance-select-target{width:44px;height:44px}
+ .app main table td,.app main table th{padding:5px 7px;font-size:12px}
+ .app main .overview-kpis .big,.app main .payroll-kpis .big,.app main [data-finance-summary] .big,.app main .acct-kpis .big{font-size:clamp(15px,4.2vw,21px)}
+ .app main .overview-kpis,.app main .payroll-kpis,.app main [data-finance-summary]{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .app main .overview-kpis .card,.app main .payroll-kpis .card,.app main [data-finance-summary] .card{padding:10px}
+ .density-day-cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+ .app main .density-day-cards .card{padding:8px 10px}
+ .density-day-cards strong{font-size:20px}
+ .density-view-nav .chip{flex:1 1 auto}
+ .density-table-tools .density-search{max-width:none;flex-basis:100%}
+ .density-table-tools .density-column{flex:1 1 150px}
+ .density-table-count{flex-basis:100%;margin-bottom:0}
+ .app main .row>input,.app main .row>select{flex-basis:145px}
+ .app main .form-grid,.task-dialog .form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .app main .form-grid input,.app main .form-grid select,.task-dialog .form-grid input,.task-dialog .form-grid select{font-size:16px}
+}
+@media(max-width:380px){
+ .app main .form-grid,.task-dialog .form-grid,.density-flat-grid{grid-template-columns:1fr}
+ .density-flat-grid>*{grid-column:1/-1!important;grid-row:auto!important}
+}
+@media print{
+ .density-view-nav,.density-table-tools,.density-filter-note,.density-empty,.density-pager{display:none!important}
+ [data-density-panel][data-density-inactive]{display:revert!important}
+ tr[data-density-filtered]:not([hidden]),tr[data-density-page-inactive]:not([hidden]){display:table-row!important}
+}

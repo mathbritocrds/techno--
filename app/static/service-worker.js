@@ -1,5 +1,5 @@
-const CACHE = "sigi-shell-v10";
-const SHELL = ["/", "/business.js", "/enhancements.js", "/enhancements.css", "/accounting.css", "/accounting.bundle.js", "/service-worker.js", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "sigi-shell-v11";
+const SHELL = ["/", "/business.js", "/enhancements.js", "/enhancements.css", "/accounting.css", "/accounting.bundle.js", "/density.css", "/density.js", "/service-worker.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
